@@ -125,42 +125,61 @@ class AmbientSoundEngine {
     this.activeSources.push(oscLeft, oscRight, gainL, gainR, merger);
   }
 
-  public playKeyClick() {
+  public playKeyClick(type: 'standard' | 'backspace' | 'enter' = 'standard') {
     try {
       this.initContext();
       if (!this.ctx) return;
 
       if (this.ctx.state === 'suspended') {
         this.ctx.resume().then(() => {
-          this.dispatchKeyClick();
+          this.dispatchKeyClick(type);
         }).catch(() => {});
         return;
       }
 
-      this.dispatchKeyClick();
+      this.dispatchKeyClick(type);
     } catch {
       // Audio autoplay policy catch
     }
   }
 
-  private dispatchKeyClick() {
+  private dispatchKeyClick(type: 'standard' | 'backspace' | 'enter') {
     if (!this.ctx || this.ctx.state !== 'running') return;
     try {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(700 + Math.random() * 200, this.ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.04);
+      if (type === 'backspace') {
+        // Deeper, heavier mechanical thud for Backspace/Delete
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(460 + Math.random() * 60, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(75, this.ctx.currentTime + 0.05);
 
-      gain.gain.setValueAtTime(0.06, this.ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.04);
+        gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
+      } else if (type === 'enter') {
+        // Crisp chime/carrier return for Enter
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(820 + Math.random() * 80, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(130, this.ctx.currentTime + 0.06);
+
+        gain.gain.setValueAtTime(0.07, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.06);
+      } else {
+        // Standard mechanical click
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(700 + Math.random() * 200, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.04);
+
+        gain.gain.setValueAtTime(0.06, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.04);
+      }
 
       osc.connect(gain);
       gain.connect(this.ctx.destination);
 
       osc.start();
-      osc.stop(this.ctx.currentTime + 0.05);
+      osc.stop(this.ctx.currentTime + 0.06);
     } catch {
       // Audio node failure catch
     }

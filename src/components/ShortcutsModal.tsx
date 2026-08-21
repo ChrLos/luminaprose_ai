@@ -16,13 +16,18 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   if (!isOpen) return null;
 
   const SHORTCUTS = [
-    { key: 'Ctrl / Cmd + K', action: 'Open Global Command Palette' },
+    { key: 'Ctrl / Cmd + P', action: 'Open Global Command Palette' },
+    { key: 'Ctrl / Cmd + F', action: 'Find in Document' },
+    { key: 'Ctrl / Cmd + H', action: 'Find & Replace' },
+    { key: 'Ctrl / Cmd + K', action: 'Insert Hyperlink [text](url)' },
+    { key: 'Ctrl / Cmd + Z', action: 'Undo edit' },
+    { key: 'Ctrl / Cmd + Shift + Z / Y', action: 'Redo edit' },
+    { key: 'Backspace', action: 'Revert smart symbol (→ back to ->)' },
     { key: 'Ctrl / Cmd + 1', action: 'Switch to Split View' },
     { key: 'Ctrl / Cmd + 2', action: 'Switch to Reader Mode' },
     { key: 'Ctrl / Cmd + 3', action: 'Switch to Editor Mode' },
     { key: 'Ctrl / Cmd + B', action: 'Bold text (**)' },
     { key: 'Ctrl / Cmd + I', action: 'Italic text (*)' },
-    { key: 'Ctrl / Cmd + P', action: 'Print / Save as PDF' },
     { key: 'Ctrl / Cmd + /', action: 'Open Shortcuts Helper' },
     { key: 'Tab', action: 'Indent 2 spaces' },
     { key: 'Escape', action: 'Close modal / Exit presentation' },

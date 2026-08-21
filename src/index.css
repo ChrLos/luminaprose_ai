@@ -435,6 +435,17 @@
   line-height: 1.65;
 }
 
+/* Mermaid Pan & Zoom Modal SVG handling */
+.mermaid-viewer-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mermaid-viewer-content svg {
+  max-width: none !important;
+  max-height: none !important;
+}
+
 /* Print Stylesheet for flawless PDF & paper printing */
 @media print {
   body {

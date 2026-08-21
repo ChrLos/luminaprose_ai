@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ThemeConfig } from '../types';
 import { ambientAudio } from '../utils/ambientAudio';
+import { useFocusTrap } from '../utils/useFocusTrap';
 
 interface AmbientSoundModalProps {
   isOpen: boolean;
@@ -31,12 +32,13 @@ export const AmbientSoundModal: React.FC<AmbientSoundModalProps> = ({
   onToggleTypewriterSound,
   onAudioStateChange,
 }) => {
-  if (!isOpen) return null;
-
+  const modalRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
   const [activeSound, setActiveSound] = useState<string | null>(
     ambientAudio.getStatus().isPlaying ? ambientAudio.getStatus().currentType : null
   );
   const [volume, setVolume] = useState<number>(ambientAudio.getStatus().volume);
+
+  if (!isOpen) return null;
 
   const SOUND_PRESETS = [
     { id: 'rain', label: 'Lofi Rain', desc: 'Gentle raindrops on window', icon: CloudRain },
@@ -76,12 +78,16 @@ export const AmbientSoundModal: React.FC<AmbientSoundModalProps> = ({
       />
 
       <div 
+        ref={modalRef}
         className="relative max-w-md w-full rounded-2xl shadow-2xl border p-6 z-10 space-y-6"
         style={{
           backgroundColor: theme.bg,
           borderColor: theme.border,
           color: theme.text,
         }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ambient Focus Audio"
       >
         <div className="flex items-center justify-between border-b pb-4" style={{ borderColor: theme.border }}>
           <div className="flex items-center gap-2">

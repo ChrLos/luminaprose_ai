@@ -166,8 +166,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         )}
       </div>
 
-      {/* Zone 2: Navigation Links (Hidden on mobile as they exist in bottom pill) */}
-      <nav className="hidden md:flex items-center gap-1 sm:gap-1.5 overflow-x-auto py-1 scrollbar-none">
+      {/* Zone 2: Navigation Links (Centered to guarantee zero horizontal shift across any view mode) */}
+      <nav className="hidden md:flex items-center gap-1 sm:gap-1.5 py-1 select-none absolute left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
         <div 
           className="flex items-center p-0.5 rounded-lg border"
           style={{
@@ -252,34 +252,6 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </div>
 
-        {/* Bi-Directional Synchronous Scroll Lock Toggle Button (Split Mode) */}
-        {currentView === 'split' && onToggleSyncScroll && (
-          <button
-            type="button"
-            onClick={onToggleSyncScroll}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
-              syncScroll ? 'shadow-xs font-semibold' : 'opacity-60 hover:opacity-100'
-            }`}
-            style={{
-              borderColor: syncScroll ? theme.accent : theme.border,
-              backgroundColor: syncScroll ? theme.bgElevated : theme.bg,
-              color: syncScroll ? theme.accent : theme.textMuted,
-            }}
-            title={
-              syncScroll
-                ? 'Bi-Directional Synchronous Scroll: LOCKED (Editor and Preview scroll percentage are synced)'
-                : 'Bi-Directional Synchronous Scroll: UNLOCKED (Editor and Preview scroll independently)'
-            }
-          >
-            {syncScroll ? (
-              <Link2 className="w-3.5 h-3.5 shrink-0" />
-            ) : (
-              <Unlink2 className="w-3.5 h-3.5 shrink-0" />
-            )}
-            <span className="hidden md:inline">{syncScroll ? 'Scroll Sync' : 'Scroll Unlinked'}</span>
-          </button>
-        )}
-
         {/* Ambient Synthesizer Button */}
         <button
           type="button"
@@ -318,7 +290,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           onClick={onOpenShortcuts}
-          className="hidden xl:flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium opacity-80 hover:opacity-100 transition-all whitespace-nowrap cursor-pointer"
+          className="hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium opacity-80 hover:opacity-100 transition-all whitespace-nowrap cursor-pointer"
           style={{
             borderColor: theme.border,
             color: theme.textMuted,
@@ -329,7 +301,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </button>
       </nav>
 
-      {/* Zone 3: Primary Action Controls (Hidden on mobile as they exist in bottom pill / sheet) */}
+      {/* Zone 3: Primary Action Controls */}
       <div className="hidden md:flex items-center gap-2 shrink-0">
         {/* Global Command Palette Trigger */}
         <button
@@ -341,13 +313,41 @@ export const TopBar: React.FC<TopBarProps> = ({
             backgroundColor: theme.bgElevated,
             color: theme.text,
           }}
-          title="Global Command Palette (Ctrl+K / Cmd+K)"
+          title="Global Command Palette (Ctrl+P / Cmd+P)"
         >
           <Search className="w-3.5 h-3.5 opacity-70" />
-          <kbd className="hidden sm:inline-flex px-1.5 py-0.2 text-[10px] font-mono font-semibold rounded border opacity-70" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>⌘K</kbd>
+          <kbd className="hidden sm:inline-flex px-1.5 py-0.2 text-[10px] font-mono font-semibold rounded border opacity-70" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>⌘P</kbd>
         </button>
 
-        {/* Typography Studio Drawer Trigger */}
+        {/* Bi-Directional Synchronous Scroll Lock Toggle Button (Between Command Palette and Atmosphere) */}
+        {currentView === 'split' && onToggleSyncScroll && (
+          <button
+            type="button"
+            onClick={onToggleSyncScroll}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
+              syncScroll ? 'shadow-xs font-semibold' : 'opacity-60 hover:opacity-100'
+            }`}
+            style={{
+              borderColor: syncScroll ? theme.accent : theme.border,
+              backgroundColor: syncScroll ? theme.bgElevated : theme.bg,
+              color: syncScroll ? theme.accent : theme.textMuted,
+            }}
+            title={
+              syncScroll
+                ? 'Bi-Directional Synchronous Scroll: LOCKED (Editor and Preview scroll percentage are synced)'
+                : 'Bi-Directional Synchronous Scroll: UNLOCKED (Editor and Preview scroll independently)'
+            }
+          >
+            {syncScroll ? (
+              <Link2 className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <Unlink2 className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="hidden lg:inline">{syncScroll ? 'Scroll Sync' : 'Scroll Unlinked'}</span>
+          </button>
+        )}
+
+        {/* Typography Studio Drawer Trigger (Atmosphere) */}
         <button
           type="button"
           onClick={onOpenTypography}
@@ -371,7 +371,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           style={{
             backgroundColor: theme.accent,
           }}
-          title="Export Document (PDF, HTML, Rich Text, Markdown) [Ctrl+P]"
+          title="Export Document (PDF, HTML, Rich Text, Markdown)"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Export</span>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Search,
   FileText,
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { DocumentItem, ThemeConfig, ThemeId, TypographySettings, ViewLayout } from '../types';
 import { THEMES } from '../utils/themes';
+import { useFocusTrap } from '../utils/useFocusTrap';
 
 export interface CommandPaletteProps {
   isOpen: boolean;
@@ -45,6 +46,7 @@ export interface CommandPaletteProps {
   onOpenHistory: () => void;
   onOpenAmbient: () => void;
   onOpenShortcuts: () => void;
+  onOpenChangelog?: () => void;
   onInsertTemplate: (snippet: string) => void;
   settings: TypographySettings;
   onUpdateSettings: (settings: Partial<TypographySettings>) => void;
@@ -56,12 +58,21 @@ interface CommandItem {
   id: string;
   title: string;
   subtitle?: string;
-  category: 'Recent Files' | 'Actions' | 'Views' | 'Documents' | 'Themes' | 'Templates';
+  category: 'Recent Files' | 'Documents' | 'Templates' | 'Actions' | 'View' | 'Themes';
   icon: React.ReactNode;
   shortcut?: string;
   badge?: string;
   perform: () => void;
 }
+
+const CATEGORY_ORDER: Record<string, number> = {
+  'Recent Files': 1,
+  'Documents': 2,
+  'Templates': 3,
+  'Actions': 4,
+  'View': 5,
+  'Themes': 6,
+};
 
 export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
   isOpen,
@@ -80,6 +91,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
   onOpenHistory,
   onOpenAmbient,
   onOpenShortcuts,
+  onOpenChangelog,
   onInsertTemplate,
   settings,
   onUpdateSettings,
@@ -90,6 +102,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const modalContainerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose, inputRef);
 
   useEffect(() => {
     if (isOpen) {
@@ -99,316 +112,363 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
     }
   }, [isOpen]);
 
-  // Sort documents by most recently updated
-  const recentDocs = [...documents]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 5);
+  // Build Command Items List in Exact Category Order with useMemo for high performance
+  const commands = useMemo<CommandItem[]>(() => {
+    const recentDocs = [...documents]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 5);
 
-  // Build Command Items List
-  const commands: CommandItem[] = [
-    // --- RECENT FILES (Top 5) ---
-    ...recentDocs.map((doc) => ({
-      id: `recent-doc-${doc.id}`,
-      title: doc.title,
-      subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${
-        doc.content.split(/\s+/).filter(Boolean).length
-      } words`,
-      category: 'Recent Files' as const,
-      icon: <Clock className="w-4 h-4 text-amber-500" />,
-      badge: doc.id === currentDocId ? 'ACTIVE' : undefined,
-      perform: () => {
-        onSelectDoc(doc.id);
-        onClose();
-      },
-    })),
+    return [
+      // 1. --- RECENT FILES (Top 5) ---
+      ...recentDocs.map((doc) => ({
+        id: `recent-doc-${doc.id}`,
+        title: doc.title,
+        subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${
+          doc.content.split(/\s+/).filter(Boolean).length
+        } words`,
+        category: 'Recent Files' as const,
+        icon: <Clock className="w-4 h-4 text-amber-500" />,
+        badge: doc.id === currentDocId ? 'ACTIVE' : undefined,
+        perform: () => {
+          onSelectDoc(doc.id);
+          onClose();
+        },
+      })),
 
-    // --- ACTIONS ---
-    {
-      id: 'act-export',
-      title: 'Export & Publish Document',
-      subtitle: 'Export as standalone HTML, PDF, Markdown, or Print',
-      category: 'Actions',
-      icon: <Download className="w-4 h-4 text-emerald-500" />,
-      shortcut: '⌘P',
-      perform: () => {
-        onOpenExport();
-        onClose();
+      // 2. --- DOCUMENTS ---
+      {
+        id: 'doc-create-new',
+        title: 'Create New Blank Document',
+        subtitle: 'Start writing a new note or article',
+        category: 'Documents' as const,
+        icon: <Plus className="w-4 h-4 text-emerald-500" />,
+        perform: () => {
+          onCreateDoc();
+          onClose();
+        },
       },
-    },
-    {
-      id: 'act-history',
-      title: 'Version History & Snapshots',
-      subtitle: 'View saved revisions, auto-save diffs, and restore points',
-      category: 'Actions',
-      icon: <History className="w-4 h-4 text-amber-500" />,
-      perform: () => {
-        onOpenHistory();
-        onClose();
-      },
-    },
-    {
-      id: 'act-typography',
-      title: 'Atmosphere & Typography Studio',
-      subtitle: 'Font face, font size, margins, warmth filter, paper texture',
-      category: 'Actions',
-      icon: <SlidersHorizontal className="w-4 h-4 text-amber-600" />,
-      perform: () => {
-        onOpenTypography();
-        onClose();
-      },
-    },
-    {
-      id: 'act-doc-manager',
-      title: 'Document Library',
-      subtitle: 'Browse all saved documents, import files, load samples',
-      category: 'Actions',
-      icon: <FileText className="w-4 h-4 text-blue-500" />,
-      perform: () => {
-        onOpenDocManager();
-        onClose();
-      },
-    },
-    {
-      id: 'act-ambient',
-      title: 'Ambient Sound Generator',
-      subtitle: 'Rain, white noise, forest, alpha binaural beats',
-      category: 'Actions',
-      icon: <Headphones className="w-4 h-4 text-indigo-500" />,
-      perform: () => {
-        onOpenAmbient();
-        onClose();
-      },
-    },
-    {
-      id: 'act-bionic',
-      title: settings.bionicReading ? 'Disable Bionic Reading' : 'Enable Bionic Reading',
-      subtitle: 'Bolds initial word letters to speed up visual reading saccades',
-      category: 'Actions',
-      icon: <Sparkles className="w-4 h-4 text-amber-500" />,
-      badge: settings.bionicReading ? 'ON' : 'OFF',
-      perform: () => {
-        onUpdateSettings({ bionicReading: !settings.bionicReading });
-        onClose();
-      },
-    },
-    {
-      id: 'act-focus',
-      title: settings.focusMode ? 'Disable Focus Mode' : 'Enable Focus Mode',
-      subtitle: 'Softly dims non-active paragraphs in preview',
-      category: 'Actions',
-      icon: <BookOpen className="w-4 h-4 text-emerald-500" />,
-      badge: settings.focusMode ? 'ON' : 'OFF',
-      perform: () => {
-        onUpdateSettings({ focusMode: !settings.focusMode });
-        onClose();
-      },
-    },
+      ...documents.map((doc) => ({
+        id: `doc-${doc.id}`,
+        title: doc.title,
+        subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${doc.content.split(/\s+/).filter(Boolean).length} words`,
+        category: 'Documents' as const,
+        icon: <FileText className="w-4 h-4 text-stone-400" />,
+        badge: doc.id === currentDocId ? 'ACTIVE' : undefined,
+        perform: () => {
+          onSelectDoc(doc.id);
+          onClose();
+        },
+      })),
 
-    // --- VIEW MODES ---
-    ...(onToggleSyncScroll
-      ? [
-          {
-            id: 'view-toggle-sync-scroll',
-            title: syncScroll ? 'Unlock Synchronous Scrolling' : 'Lock Synchronous Scrolling',
-            subtitle: 'Bi-directional scroll percentage linking between Editor & Preview',
-            category: 'Views' as const,
-            icon: syncScroll ? (
-              <Unlink2 className="w-4 h-4 text-amber-500" />
-            ) : (
-              <Link2 className="w-4 h-4 text-amber-500" />
-            ),
-            badge: syncScroll ? 'LOCKED' : 'UNLOCKED',
-            perform: () => {
-              onToggleSyncScroll();
-              onClose();
+      // 3. --- TEMPLATES ---
+      {
+        id: 'tmpl-table',
+        title: 'Insert Markdown Table',
+        subtitle: 'Insert formatted 3-column table template',
+        category: 'Templates' as const,
+        icon: <Table className="w-4 h-4 text-amber-500" />,
+        perform: () => {
+          onInsertTemplate(
+            '\n\n| Feature | Status | Details |\n| :--- | :---: | :--- |\n| Core Architecture | ✅ Ready | Optimized Vite + React |\n| Typography Studio | ✅ Active | 7 Font Pairings |\n| Standalone Export | ✅ Ready | Full Vector Support |\n\n'
+          );
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-note',
+        title: 'Insert Callout Note',
+        subtitle: 'Insert [!NOTE] admonition callout box',
+        category: 'Templates' as const,
+        icon: <AlertCircle className="w-4 h-4 text-blue-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n> [!NOTE] Important Notice\n> Add your detailed contextual note here.\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-tip',
+        title: 'Insert Callout Tip',
+        subtitle: 'Insert [!TIP] admonition box with icon',
+        category: 'Templates' as const,
+        icon: <Sparkles className="w-4 h-4 text-emerald-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n> [!TIP] Helpful Hint\n> Here is a helpful tip for your readers.\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-warning',
+        title: 'Insert Callout Warning',
+        subtitle: 'Insert [!WARNING] admonition alert box',
+        category: 'Templates' as const,
+        icon: <AlertCircle className="w-4 h-4 text-amber-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n> [!WARNING] Caution\n> Exercise caution when configuring these parameters.\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-math',
+        title: 'Insert KaTeX Math Formula Block',
+        subtitle: 'Insert LaTeX equation block $$ ... $$',
+        category: 'Templates' as const,
+        icon: <Sigma className="w-4 h-4 text-indigo-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n$$\n\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-tasks',
+        title: 'Insert Interactive Checklist',
+        subtitle: 'Insert GFM task list items',
+        category: 'Templates' as const,
+        icon: <CheckSquare className="w-4 h-4 text-emerald-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n- [x] Initial outline review\n- [ ] Draft core thesis statement\n- [ ] Add mathematical derivations\n- [ ] Final proofreading\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-code',
+        title: 'Insert Code Block',
+        subtitle: 'Insert syntax-highlighted code block',
+        category: 'Templates' as const,
+        icon: <Code className="w-4 h-4 text-purple-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n```typescript\nfunction calculateMetrics(text: string) {\n  const words = text.trim().split(/\\s+/).filter(Boolean);\n  return { wordCount: words.length };\n}\n```\n\n');
+          onClose();
+        },
+      },
+      {
+        id: 'tmpl-mermaid',
+        title: 'Insert Mermaid.js Diagram',
+        subtitle: 'Insert flowchart, sequence, or architecture diagram (```mermaid)',
+        category: 'Templates' as const,
+        icon: <Sparkles className="w-4 h-4 text-amber-500" />,
+        perform: () => {
+          onInsertTemplate('\n\n```mermaid\ngraph TD\n  A[Start Idea] --> B{Feasible?}\n  B -->|Yes| C[Design & Prototype]\n  B -->|No| D[Re-evaluate Requirements]\n  C --> E[Deliver Finished Work]\n```\n\n');
+          onClose();
+        },
+      },
+
+      // 4. --- ACTIONS ---
+      {
+        id: 'act-export',
+        title: 'Export & Publish Document',
+        subtitle: 'Export as standalone HTML, PDF, Markdown, or Print',
+        category: 'Actions' as const,
+        icon: <Download className="w-4 h-4 text-emerald-500" />,
+        perform: () => {
+          onOpenExport();
+          onClose();
+        },
+      },
+      {
+        id: 'act-history',
+        title: 'Version History & Snapshots',
+        subtitle: 'View saved revisions, auto-save diffs, and restore points',
+        category: 'Actions' as const,
+        icon: <History className="w-4 h-4 text-amber-500" />,
+        perform: () => {
+          onOpenHistory();
+          onClose();
+        },
+      },
+      {
+        id: 'act-typography',
+        title: 'Atmosphere & Typography Studio',
+        subtitle: 'Font face, font size, margins, warmth filter, paper texture',
+        category: 'Actions' as const,
+        icon: <SlidersHorizontal className="w-4 h-4 text-amber-600" />,
+        perform: () => {
+          onOpenTypography();
+          onClose();
+        },
+      },
+      {
+        id: 'act-doc-manager',
+        title: 'Document Library',
+        subtitle: 'Browse all saved documents, import files, load samples',
+        category: 'Actions' as const,
+        icon: <FileText className="w-4 h-4 text-blue-500" />,
+        perform: () => {
+          onOpenDocManager();
+          onClose();
+        },
+      },
+      {
+        id: 'act-changelog',
+        title: "What's New in MarkFlow (Release Notes)",
+        subtitle: 'View features, enhancements, and performance updates in v2.5.0',
+        category: 'Actions' as const,
+        icon: <Sparkles className="w-4 h-4 text-amber-500" />,
+        perform: () => {
+          if (onOpenChangelog) onOpenChangelog();
+          onClose();
+        },
+      },
+      {
+        id: 'act-ambient',
+        title: 'Ambient Sound Generator',
+        subtitle: 'Rain, white noise, forest, alpha binaural beats',
+        category: 'Actions' as const,
+        icon: <Headphones className="w-4 h-4 text-indigo-500" />,
+        perform: () => {
+          onOpenAmbient();
+          onClose();
+        },
+      },
+      {
+        id: 'act-bionic',
+        title: settings.bionicReading ? 'Disable Bionic Reading' : 'Enable Bionic Reading',
+        subtitle: 'Bolds initial word letters to speed up visual reading saccades',
+        category: 'Actions' as const,
+        icon: <Sparkles className="w-4 h-4 text-amber-500" />,
+        badge: settings.bionicReading ? 'ON' : 'OFF',
+        perform: () => {
+          onUpdateSettings({ bionicReading: !settings.bionicReading });
+          onClose();
+        },
+      },
+      {
+        id: 'act-focus',
+        title: settings.focusMode ? 'Disable Focus Mode' : 'Enable Focus Mode',
+        subtitle: 'Softly dims non-active paragraphs in preview',
+        category: 'Actions' as const,
+        icon: <BookOpen className="w-4 h-4 text-emerald-500" />,
+        badge: settings.focusMode ? 'ON' : 'OFF',
+        perform: () => {
+          onUpdateSettings({ focusMode: !settings.focusMode });
+          onClose();
+        },
+      },
+
+      // 5. --- VIEW ---
+      ...(onToggleSyncScroll
+        ? [
+            {
+              id: 'view-toggle-sync-scroll',
+              title: syncScroll ? 'Unlock Synchronous Scrolling' : 'Lock Synchronous Scrolling',
+              subtitle: 'Bi-directional scroll percentage linking between Editor & Preview',
+              category: 'View' as const,
+              icon: syncScroll ? (
+                <Unlink2 className="w-4 h-4 text-amber-500" />
+              ) : (
+                <Link2 className="w-4 h-4 text-amber-500" />
+              ),
+              badge: syncScroll ? 'LOCKED' : 'UNLOCKED',
+              perform: () => {
+                onToggleSyncScroll();
+                onClose();
+              },
             },
-          },
-        ]
-      : []),
-    {
-      id: 'view-split',
-      title: 'Switch to Split View',
-      subtitle: 'Side-by-side Markdown editor and rendered preview',
-      category: 'Views',
-      icon: <Columns2 className="w-4 h-4 text-sky-500" />,
-      shortcut: '⌘1',
-      perform: () => {
-        onViewChange('split');
-        onClose();
+          ]
+        : []),
+      {
+        id: 'view-split',
+        title: 'Switch to Split View',
+        subtitle: 'Side-by-side Markdown editor and rendered preview',
+        category: 'View' as const,
+        icon: <Columns2 className="w-4 h-4 text-sky-500" />,
+        shortcut: '⌘1',
+        perform: () => {
+          onViewChange('split');
+          onClose();
+        },
       },
-    },
-    {
-      id: 'view-reader',
-      title: 'Switch to Reader Mode',
-      subtitle: 'Distraction-free pure reading surface',
-      category: 'Views',
-      icon: <BookOpen className="w-4 h-4 text-amber-500" />,
-      shortcut: '⌘2',
-      perform: () => {
-        onViewChange('reader');
-        onClose();
+      {
+        id: 'view-reader',
+        title: 'Switch to Reader Mode',
+        subtitle: 'Distraction-free pure reading surface',
+        category: 'View' as const,
+        icon: <BookOpen className="w-4 h-4 text-amber-500" />,
+        shortcut: '⌘2',
+        perform: () => {
+          onViewChange('reader');
+          onClose();
+        },
       },
-    },
-    {
-      id: 'view-editor',
-      title: 'Switch to Write Mode',
-      subtitle: 'Clean focused editor surface',
-      category: 'Views',
-      icon: <PenLine className="w-4 h-4 text-indigo-500" />,
-      shortcut: '⌘3',
-      perform: () => {
-        onViewChange('editor');
-        onClose();
+      {
+        id: 'view-editor',
+        title: 'Switch to Write Mode',
+        subtitle: 'Clean focused editor surface',
+        category: 'View' as const,
+        icon: <PenLine className="w-4 h-4 text-indigo-500" />,
+        shortcut: '⌘3',
+        perform: () => {
+          onViewChange('editor');
+          onClose();
+        },
       },
-    },
-    {
-      id: 'view-slides',
-      title: 'Switch to Presentation Slides',
-      subtitle: 'Full-screen slide deck separated by --- rules',
-      category: 'Views',
-      icon: <Presentation className="w-4 h-4 text-rose-500" />,
-      perform: () => {
-        onViewChange('slides');
-        onClose();
+      {
+        id: 'view-slides',
+        title: 'Switch to Presentation Slides',
+        subtitle: 'Full-screen slide deck separated by --- rules',
+        category: 'View' as const,
+        icon: <Presentation className="w-4 h-4 text-rose-500" />,
+        perform: () => {
+          onViewChange('slides');
+          onClose();
+        },
       },
-    },
 
-    // --- DOCUMENTS ---
-    {
-      id: 'doc-create-new',
-      title: 'Create New Blank Document',
-      subtitle: 'Start writing a new note or article',
-      category: 'Documents',
-      icon: <Plus className="w-4 h-4 text-emerald-500" />,
-      perform: () => {
-        onCreateDoc();
-        onClose();
-      },
-    },
-    ...documents.map((doc) => ({
-      id: `doc-${doc.id}`,
-      title: doc.title,
-      subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${doc.content.split(/\s+/).filter(Boolean).length} words`,
-      category: 'Documents' as const,
-      icon: <FileText className="w-4 h-4 text-stone-400" />,
-      badge: doc.id === currentDocId ? 'ACTIVE' : undefined,
-      perform: () => {
-        onSelectDoc(doc.id);
-        onClose();
-      },
-    })),
+      // 6. --- THEMES ---
+      ...Object.values(THEMES).map((t) => ({
+        id: `theme-${t.id}`,
+        title: `Theme: ${t.name}`,
+        subtitle: `${t.category.toUpperCase()} atmosphere theme`,
+        category: 'Themes' as const,
+        icon: (
+          <span
+            className="w-4 h-4 rounded-full border shadow-2xs flex shrink-0"
+            style={{ backgroundColor: t.bg, borderColor: t.border }}
+          />
+        ),
+        badge: t.id === currentThemeId ? 'ACTIVE' : undefined,
+        perform: () => {
+          onSelectTheme(t.id);
+          onClose();
+        },
+      })),
+    ];
+  }, [
+    documents,
+    currentDocId,
+    settings.bionicReading,
+    settings.focusMode,
+    syncScroll,
+    currentThemeId,
+    onSelectDoc,
+    onCreateDoc,
+    onInsertTemplate,
+    onOpenExport,
+    onOpenHistory,
+    onOpenTypography,
+    onOpenDocManager,
+    onOpenAmbient,
+    onOpenChangelog,
+    onUpdateSettings,
+    onToggleSyncScroll,
+    onViewChange,
+    onSelectTheme,
+    onClose,
+  ]);
 
-    // --- THEMES ---
-    ...Object.values(THEMES).map((t) => ({
-      id: `theme-${t.id}`,
-      title: `Theme: ${t.name}`,
-      subtitle: `${t.category.toUpperCase()} atmosphere theme`,
-      category: 'Themes' as const,
-      icon: (
-        <span
-          className="w-4 h-4 rounded-full border shadow-2xs flex shrink-0"
-          style={{ backgroundColor: t.bg, borderColor: t.border }}
-        />
-      ),
-      badge: t.id === currentThemeId ? 'ACTIVE' : undefined,
-      perform: () => {
-        onSelectTheme(t.id);
-        onClose();
-      },
-    })),
-
-    // --- TEMPLATES ---
-    {
-      id: 'tmpl-table',
-      title: 'Insert Markdown Table',
-      subtitle: 'Insert formatted 3-column table template',
-      category: 'Templates',
-      icon: <Table className="w-4 h-4 text-amber-500" />,
-      perform: () => {
-        onInsertTemplate(
-          '\n\n| Feature | Status | Details |\n| :--- | :---: | :--- |\n| Core Architecture | ✅ Ready | Optimized Vite + React |\n| Typography Studio | ✅ Active | 7 Font Pairings |\n| Standalone Export | ✅ Ready | Full Vector Support |\n\n'
+  // Filter commands by search term and sort by explicit category hierarchy
+  const filteredCommands = useMemo(() => {
+    return commands
+      .filter((cmd) => {
+        if (!search.trim()) return true;
+        const q = search.toLowerCase().trim();
+        return (
+          cmd.title.toLowerCase().includes(q) ||
+          (cmd.subtitle && cmd.subtitle.toLowerCase().includes(q)) ||
+          cmd.category.toLowerCase().includes(q)
         );
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-note',
-      title: 'Insert Callout Note',
-      subtitle: 'Insert [!NOTE] admonition callout box',
-      category: 'Templates',
-      icon: <AlertCircle className="w-4 h-4 text-blue-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n> [!NOTE] Important Notice\n> Add your detailed contextual note here.\n\n');
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-tip',
-      title: 'Insert Callout Tip',
-      subtitle: 'Insert [!TIP] admonition box with icon',
-      category: 'Templates',
-      icon: <Sparkles className="w-4 h-4 text-emerald-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n> [!TIP] Helpful Hint\n> Here is a helpful tip for your readers.\n\n');
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-warning',
-      title: 'Insert Callout Warning',
-      subtitle: 'Insert [!WARNING] admonition alert box',
-      category: 'Templates',
-      icon: <AlertCircle className="w-4 h-4 text-amber-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n> [!WARNING] Caution\n> Exercise caution when configuring these parameters.\n\n');
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-math',
-      title: 'Insert KaTeX Math Formula Block',
-      subtitle: 'Insert LaTeX equation block $$ ... $$',
-      category: 'Templates',
-      icon: <Sigma className="w-4 h-4 text-indigo-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n$$\n\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n\n');
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-tasks',
-      title: 'Insert Interactive Checklist',
-      subtitle: 'Insert GFM task list items',
-      category: 'Templates',
-      icon: <CheckSquare className="w-4 h-4 text-emerald-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n- [x] Initial outline review\n- [ ] Draft core thesis statement\n- [ ] Add mathematical derivations\n- [ ] Final proofreading\n\n');
-        onClose();
-      },
-    },
-    {
-      id: 'tmpl-code',
-      title: 'Insert Code Block',
-      subtitle: 'Insert syntax-highlighted code block',
-      category: 'Templates',
-      icon: <Code className="w-4 h-4 text-purple-500" />,
-      perform: () => {
-        onInsertTemplate('\n\n```typescript\nfunction calculateMetrics(text: string) {\n  const words = text.trim().split(/\\s+/).filter(Boolean);\n  return { wordCount: words.length };\n}\n```\n\n');
-        onClose();
-      },
-    },
-  ];
-
-  // Filter commands by search term
-  const filteredCommands = commands.filter((cmd) => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase().trim();
-    return (
-      cmd.title.toLowerCase().includes(q) ||
-      (cmd.subtitle && cmd.subtitle.toLowerCase().includes(q)) ||
-      cmd.category.toLowerCase().includes(q)
-    );
-  });
+      })
+      .sort((a, b) => (CATEGORY_ORDER[a.category] || 99) - (CATEGORY_ORDER[b.category] || 99));
+  }, [commands, search]);
 
   // Clamp selection index
   useEffect(() => {
@@ -457,6 +517,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       />
 
       <div
+        ref={modalContainerRef}
         className="relative w-full max-w-2xl rounded-xl border shadow-2xl overflow-hidden flex flex-col max-h-[75vh] z-10 select-none animate-in zoom-in-95 duration-150"
         style={{
           backgroundColor: theme.bgSecondary,
@@ -464,6 +525,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
           color: theme.text,
         }}
         onKeyDown={handleKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command Palette"
       >
         {/* Search Header Input */}
         <div
@@ -479,7 +543,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
               setSearch(e.target.value);
               setSelectedIndex(0);
             }}
-            placeholder="Type a command or search documents, themes, templates... (⌘K)"
+            placeholder="Type a command or search documents, themes, templates... (⌘P)"
             className="w-full bg-transparent text-sm sm:text-base outline-none placeholder:opacity-40 font-medium"
             style={{ color: theme.text }}
           />

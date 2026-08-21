@@ -102,6 +102,17 @@ $$
 
 The **Lumina Event Broker** is a high-throughput, low-latency streaming platform designed for immutable event sourcing and real-time ledger synchronization.
 
+\`\`\`mermaid
+graph LR
+  Client[Client Applications] -->|Publish Event| Gateway[Ingress Gateway]
+  Gateway --> Router{Consistent Hash Router}
+  Router -->|Shard 1| Partition1[(Partition A)]
+  Router -->|Shard 2| Partition2[(Partition B)]
+  Partition1 --> Rebalancer[Consensus Raft Group]
+  Partition2 --> Rebalancer
+  Rebalancer --> Consumer[Consumer Groups]
+\`\`\`
+
 \`\`\`typescript
 import { EventStream, ConsumerGroup, PartitionRouter } from '@lumina/core';
 

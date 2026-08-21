@@ -7,7 +7,9 @@ import {
   Minimize2
 } from 'lucide-react';
 import { ThemeConfig, TypographySettings } from '../types';
-import { parseMarkdownToHtml } from '../utils/markdownParser';
+import { parseMarkdownToHtml, clearParseCache } from '../utils/markdownParser';
+import { renderMermaidInContainer, subscribeMermaidUpdates } from '../utils/mermaidRenderer';
+import { MermaidViewerModal } from './MermaidViewerModal';
 
 interface PresentationViewProps {
   markdown: string;
@@ -25,8 +27,36 @@ export const PresentationView: React.FC<PresentationViewProps> = ({
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isControlsVisible, setIsControlsVisible] = useState(true);
+  const [viewingMermaid, setViewingMermaid] = useState<{ rawCode: string; svgHtml: string } | null>(null);
   const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+
+  // Setup global open viewer handler for presentation slide view
+  useEffect(() => {
+    (window as any).__openMermaidViewer = (btn: HTMLElement) => {
+      const codeEncoded = btn.getAttribute('data-code');
+      const wrapper = btn.closest('.mermaid-block-wrapper');
+      const diagramEl = wrapper ? wrapper.querySelector('.mermaid-diagram') : null;
+      const svgHtml = diagramEl ? diagramEl.innerHTML : '';
+      const rawCode = codeEncoded ? decodeURIComponent(codeEncoded) : '';
+      if (rawCode) {
+        setViewingMermaid({ rawCode, svgHtml });
+      }
+    };
+
+    return () => {
+      delete (window as any).__openMermaidViewer;
+    };
+  }, []);
+
+  const [mermaidVersion, setMermaidVersion] = useState(0);
+
+  useEffect(() => {
+    return subscribeMermaidUpdates(() => {
+      clearParseCache();
+      setMermaidVersion((v) => v + 1);
+    });
+  }, []);
 
   // Split markdown by '---' to form slides
   const slides = useMemo(() => {
@@ -41,10 +71,17 @@ export const PresentationView: React.FC<PresentationViewProps> = ({
   const totalSlides = slides.length;
 
   const currentSlideHtml = useMemo(() => {
-    return parseMarkdownToHtml(slides[currentSlide] || '', {
-      highlightSyntax: true,
-    });
-  }, [slides, currentSlide]);
+    return parseMarkdownToHtml(slides[currentSlide] || '', theme.category === 'dark', false);
+  }, [slides, currentSlide, theme.category, mermaidVersion]);
+
+  // Render Mermaid diagrams on slide change
+  useEffect(() => {
+    renderMermaidInContainer(stageRef.current, theme.category === 'dark');
+    const timer = setTimeout(() => {
+      renderMermaidInContainer(stageRef.current, theme.category === 'dark');
+    }, 40);
+    return () => clearTimeout(timer);
+  }, [currentSlideHtml, theme.category]);
 
   const handleNext = () => {
     if (currentSlide < totalSlides - 1) {
@@ -314,6 +351,17 @@ export const PresentationView: React.FC<PresentationViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Mermaid Diagram Pan & Zoom Modal */}
+      {viewingMermaid && (
+        <MermaidViewerModal
+          isOpen={Boolean(viewingMermaid)}
+          onClose={() => setViewingMermaid(null)}
+          rawCode={viewingMermaid.rawCode}
+          svgHtml={viewingMermaid.svgHtml}
+          theme={theme}
+        />
+      )}
     </div>
   );
 };

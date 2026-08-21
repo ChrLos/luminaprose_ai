@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { 
   Bold, 
   Italic, 
@@ -16,21 +16,37 @@ import {
   Table, 
   Divide, 
   Sigma, 
-  Info,
-  Sparkles
+  Sparkles,
+  RotateCcw,
+  RotateCw,
+  Type,
+  ChevronDown,
+  Check,
+  Search,
+  Workflow
 } from 'lucide-react';
 import { ThemeConfig, TypographySettings } from '../types';
 import { ambientAudio } from '../utils/ambientAudio';
+import { transformCase, transformLinesList, CaseStyle, ListType } from '../utils/textTransform';
+import { checkSmartTypography, handleSmartQuote, SmartTransformRecord } from '../utils/smartTypography';
+import { FindReplaceBar } from './FindReplaceBar';
+import { SearchMinimapRuler } from './SearchMinimapRuler';
+import { TableBuilderModal } from './TableBuilderModal';
 
 interface EditorProps {
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, isImmediate?: boolean) => void;
   theme: ThemeConfig;
   settings: TypographySettings;
   playTypewriterSound: boolean;
   scrollRef?: React.RefObject<HTMLTextAreaElement | null>;
   onScrollSync?: (scrollTop: number, scrollHeight: number, clientHeight: number) => void;
   onScrollDirectionChange?: (isVisible: boolean) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  onRecordHistory?: (beforeValue: string, selStart?: number, selEnd?: number) => void;
 }
 
 export const Editor: React.FC<EditorProps> = React.memo(({
@@ -42,89 +58,557 @@ export const Editor: React.FC<EditorProps> = React.memo(({
   scrollRef,
   onScrollSync,
   onScrollDirectionChange,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  onRecordHistory,
 }) => {
   const internalTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = scrollRef || internalTextareaRef;
   const containerRef = useRef<HTMLDivElement>(null);
   const lastScrollTopRef = useRef<number>(0);
 
-  // Maintain fast local value for 120 FPS typing
+  // Fast local value for responsive typing
   const [localValue, setLocalValue] = useState(value);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const typingHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSnapshotValueRef = useRef<string>(value);
+  const charsSinceLastSnapshotRef = useRef<number>(0);
 
-  // Sync with prop value when changing documents or external updates
-  useEffect(() => {
-    if (value !== localValue) {
-      setLocalValue(value);
-    }
-  }, [value]);
+  // Case transformation dropdown menu state
+  const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false);
+  const caseMenuRef = useRef<HTMLDivElement>(null);
 
-  // Clean up timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
+  // Smart Typography Backspace Record ref
+  const lastSmartTransformRef = useRef<SmartTransformRecord | null>(null);
+
+  // Find and Replace State
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [showReplace, setShowReplace] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [matchCase, setMatchCase] = useState(false);
+  const [matchWholeWord, setMatchWholeWord] = useState(false);
+  const [currentMatchIdx, setCurrentMatchIdx] = useState(0);
+
+  // Visual Table Builder Modal state
+  const [isTableBuilderOpen, setIsTableBuilderOpen] = useState(false);
 
   // Debounced parent notification
-  const notifyParent = (val: string, immediate = false) => {
+  const notifyParent = useCallback((val: string, immediate = false) => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
 
     if (immediate) {
-      onChange(val);
+      onChange(val, true);
     } else {
       debounceTimerRef.current = setTimeout(() => {
-        onChange(val);
-      }, 100);
+        onChange(val, false);
+      }, 80);
     }
-  };
+  }, [onChange]);
 
+  // Record history snapshot helper before programmatic toolbar action
+  const recordCurrentStateForHistory = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (onRecordHistory) {
+      onRecordHistory(
+        localValue,
+        textarea?.selectionStart,
+        textarea?.selectionEnd
+      );
+      lastSnapshotValueRef.current = localValue;
+      charsSinceLastSnapshotRef.current = 0;
+    }
+  }, [localValue, onRecordHistory, textareaRef]);
+
+  // Sync with prop value when changing documents or on Undo/Redo
+  useEffect(() => {
+    if (value !== localValue) {
+      setLocalValue(value);
+      lastSnapshotValueRef.current = value;
+      charsSinceLastSnapshotRef.current = 0;
+      lastSmartTransformRef.current = null;
+    }
+  }, [value]);
+
+  // Compute all matches
+  const matches = useMemo(() => {
+    if (!findQuery) return [];
+    const results: { start: number; end: number }[] = [];
+    try {
+      let escapedQuery = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (matchWholeWord) {
+        escapedQuery = `\\b${escapedQuery}\\b`;
+      }
+      const flags = matchCase ? 'g' : 'gi';
+      const regex = new RegExp(escapedQuery, flags);
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(localValue)) !== null) {
+        results.push({ start: match.index, end: match.index + match[0].length });
+        if (!regex.global) break;
+      }
+    } catch {
+      // Ignore invalid regex
+    }
+    return results;
+  }, [localValue, findQuery, matchCase, matchWholeWord]);
+
+  // Sync match index when matches change
+  useEffect(() => {
+    if (matches.length === 0) {
+      setCurrentMatchIdx(0);
+    } else if (currentMatchIdx >= matches.length) {
+      setCurrentMatchIdx(0);
+    }
+  }, [matches.length, currentMatchIdx]);
+
+  // Jump to specific match in textarea
+  const highlightMatch = useCallback((index: number, matchesList = matches) => {
+    if (matchesList.length === 0) return;
+    const safeIdx = Math.max(0, Math.min(index, matchesList.length - 1));
+    const target = matchesList[safeIdx];
+    setCurrentMatchIdx(safeIdx);
+
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.focus();
+      textarea.setSelectionRange(target.start, target.end);
+      
+      const fullTextBefore = localValue.substring(0, target.start);
+      const lineNumber = fullTextBefore.split('\n').length;
+      const approxLineHeight = 22;
+      const targetScrollTop = Math.max(0, (lineNumber - 4) * approxLineHeight);
+      textarea.scrollTop = targetScrollTop;
+    }
+  }, [matches, localValue, textareaRef]);
+
+  const handleFindNext = useCallback(() => {
+    if (matches.length === 0) return;
+    const nextIdx = (currentMatchIdx + 1) % matches.length;
+    highlightMatch(nextIdx);
+  }, [matches.length, currentMatchIdx, highlightMatch]);
+
+  const handleFindPrev = useCallback(() => {
+    if (matches.length === 0) return;
+    const prevIdx = (currentMatchIdx - 1 + matches.length) % matches.length;
+    highlightMatch(prevIdx);
+  }, [matches.length, currentMatchIdx, highlightMatch]);
+
+  const handleReplaceCurrent = useCallback(() => {
+    if (matches.length === 0 || !matches[currentMatchIdx]) return;
+    recordCurrentStateForHistory();
+
+    const target = matches[currentMatchIdx];
+    const newValue = localValue.substring(0, target.start) + replaceQuery + localValue.substring(target.end);
+    setLocalValue(newValue);
+    lastSnapshotValueRef.current = newValue;
+    notifyParent(newValue, true);
+
+    setTimeout(() => {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(target.start, target.start + replaceQuery.length);
+      }
+    }, 0);
+  }, [matches, currentMatchIdx, localValue, replaceQuery, recordCurrentStateForHistory, notifyParent, textareaRef]);
+
+  const handleReplaceAll = useCallback(() => {
+    if (matches.length === 0 || !findQuery) return;
+    recordCurrentStateForHistory();
+
+    let escapedQuery = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (matchWholeWord) {
+      escapedQuery = `\\b${escapedQuery}\\b`;
+    }
+    const flags = matchCase ? 'g' : 'gi';
+    const regex = new RegExp(escapedQuery, flags);
+    const newValue = localValue.replace(regex, replaceQuery);
+
+    setLocalValue(newValue);
+    lastSnapshotValueRef.current = newValue;
+    notifyParent(newValue, true);
+  }, [matches.length, findQuery, matchWholeWord, matchCase, replaceQuery, localValue, recordCurrentStateForHistory, notifyParent]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (typingHistoryTimerRef.current) clearTimeout(typingHistoryTimerRef.current);
+    };
+  }, []);
+
+  // Close case menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (caseMenuRef.current && !caseMenuRef.current.contains(e.target as Node)) {
+        setIsCaseMenuOpen(false);
+      }
+    };
+    if (isCaseMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isCaseMenuOpen]);
+
+  // Textarea input change handler with word boundary & character-count snapshot grouping
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
+    const textarea = textareaRef.current;
+    const prevVal = localValue;
     setLocalValue(val);
     notifyParent(val, false);
-  };
 
-  // Handle typing key click sounds and typewriter centering
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (playTypewriterSound && e.key.length === 1) {
-      ambientAudio.playKeyClick();
+    const diff = Math.abs(val.length - prevVal.length);
+    charsSinceLastSnapshotRef.current += diff;
+
+    // Check smart typography (e.g. ->, =>, <=, >=, !=, ..., --) outside code blocks
+    const cursorPos = textarea?.selectionStart || 0;
+    const smartCheck = checkSmartTypography(val, cursorPos);
+    if (smartCheck) {
+      const { newText, newCursor, record } = smartCheck;
+      setLocalValue(newText);
+      lastSmartTransformRef.current = record;
+      notifyParent(newText, false);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+        }
+      }, 0);
+      return;
     }
 
-    // Tab key indent support
+    // Check if the change ended on a word boundary (space, newline, punctuation)
+    const lastChar = val.slice(-1);
+    const isWordOrLineBoundary = lastChar === ' ' || lastChar === '\n' || /[.,!?:;\-]/.test(lastChar);
+
+    // Save snapshot on word/line boundary or every 10-14 chars typed
+    if (isWordOrLineBoundary || charsSinceLastSnapshotRef.current >= 12) {
+      if (onRecordHistory && lastSnapshotValueRef.current !== prevVal) {
+        onRecordHistory(
+          lastSnapshotValueRef.current,
+          textarea?.selectionStart,
+          textarea?.selectionEnd
+        );
+        lastSnapshotValueRef.current = val;
+        charsSinceLastSnapshotRef.current = 0;
+      }
+    }
+
+    // Also short debounced snapshot for typing pauses (400ms)
+    if (typingHistoryTimerRef.current) {
+      clearTimeout(typingHistoryTimerRef.current);
+    }
+    typingHistoryTimerRef.current = setTimeout(() => {
+      if (onRecordHistory && lastSnapshotValueRef.current !== val) {
+        onRecordHistory(
+          lastSnapshotValueRef.current,
+          textarea?.selectionStart,
+          textarea?.selectionEnd
+        );
+        lastSnapshotValueRef.current = val;
+        charsSinceLastSnapshotRef.current = 0;
+      }
+    }, 400);
+  };
+
+  // Helper to wrap selected text with markdown tokens (Bold, Italic, Headings, etc.)
+  const insertWrap = (before: string, after: string, defaultText = 'text') => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    recordCurrentStateForHistory();
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selectedText = localValue.substring(start, end) || defaultText;
+
+    const replacement = `${before}${selectedText}${after}`;
+    const newValue = localValue.substring(0, start) + replacement + localValue.substring(end);
+    
+    setLocalValue(newValue);
+    lastSnapshotValueRef.current = newValue;
+    notifyParent(newValue, true);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.selectionStart = start + before.length;
+      textarea.selectionEnd = start + before.length + selectedText.length;
+    }, 0);
+  };
+
+  // Helper to insert block template with proper newline spacing
+  const insertBlock = (block: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    recordCurrentStateForHistory();
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    
+    const prefix = start > 0 && localValue[start - 1] !== '\n' ? '\n\n' : (start === 0 ? '' : '\n');
+    const suffix = end < localValue.length && localValue[end] !== '\n' ? '\n\n' : (end === localValue.length ? '\n' : '');
+
+    const newValue = localValue.substring(0, start) + prefix + block + suffix + localValue.substring(end);
+    setLocalValue(newValue);
+    lastSnapshotValueRef.current = newValue;
+    notifyParent(newValue, true);
+
+    setTimeout(() => {
+      textarea.focus();
+      const newPos = start + prefix.length + block.length;
+      textarea.selectionStart = textarea.selectionEnd = newPos;
+    }, 0);
+  };
+
+  // Multi-line list and checklist transformer (switching between bullet, checklist, numbered, quote)
+  const handleListTransform = (listType: ListType) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    recordCurrentStateForHistory();
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    const { newFullText, newSelectionStart, newSelectionEnd } = transformLinesList(
+      localValue,
+      start,
+      end,
+      listType
+    );
+
+    setLocalValue(newFullText);
+    lastSnapshotValueRef.current = newFullText;
+    notifyParent(newFullText, true);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.selectionStart = newSelectionStart;
+      textarea.selectionEnd = newSelectionEnd;
+    }, 0);
+  };
+
+  // Case style transformer (Sentence case, Title Case, UPPERCASE, smallcase, camelCase, etc.)
+  const handleCaseTransform = (style: CaseStyle) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    recordCurrentStateForHistory();
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    let targetStart = start;
+    let targetEnd = end;
+    let textToTransform = '';
+
+    if (start !== end) {
+      // Selected text
+      textToTransform = localValue.substring(start, end);
+    } else {
+      // If nothing selected, find word or line at cursor
+      const lineStart = localValue.lastIndexOf('\n', start - 1) + 1;
+      let lineEnd = localValue.indexOf('\n', start);
+      if (lineEnd === -1) lineEnd = localValue.length;
+
+      targetStart = lineStart;
+      targetEnd = lineEnd;
+      textToTransform = localValue.substring(lineStart, lineEnd);
+    }
+
+    if (!textToTransform) {
+      setIsCaseMenuOpen(false);
+      return;
+    }
+
+    const transformed = transformCase(textToTransform, style);
+    const newValue = localValue.substring(0, targetStart) + transformed + localValue.substring(targetEnd);
+
+    setLocalValue(newValue);
+    lastSnapshotValueRef.current = newValue;
+    notifyParent(newValue, true);
+    setIsCaseMenuOpen(false);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.selectionStart = targetStart;
+      textarea.selectionEnd = targetStart + transformed.length;
+    }, 0);
+  };
+
+  // Handle typing key click sounds, indent, shortcuts, undo/redo, smart typography
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Mechanical key audio clicks: alphanumeric, tab, enter, backspace, delete
+    if (playTypewriterSound) {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        ambientAudio.playKeyClick('backspace');
+      } else if (e.key === 'Enter') {
+        ambientAudio.playKeyClick('enter');
+      } else if (e.key.length === 1 || e.key === 'Tab') {
+        ambientAudio.playKeyClick('standard');
+      }
+    }
+
+    // 1. Smart Backspace Reversal for Typography Conversions (e.g. → reverts to ->, “ reverts to ")
+    if (e.key === 'Backspace') {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const rec = lastSmartTransformRef.current;
+
+        if (rec && start === end && start === rec.end && textarea.value.length === rec.docLengthAfter) {
+          const currentSlice = textarea.value.substring(rec.start, rec.end);
+          if (currentSlice === rec.replaced) {
+            e.preventDefault();
+            const revertedText = textarea.value.substring(0, rec.start) + rec.original + textarea.value.substring(rec.end);
+            setLocalValue(revertedText);
+            lastSnapshotValueRef.current = revertedText;
+            lastSmartTransformRef.current = null;
+            notifyParent(revertedText, false);
+
+            const newCursor = rec.start + rec.original.length;
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+              }
+            }, 0);
+            return;
+          }
+        }
+      }
+      lastSmartTransformRef.current = null;
+    } else if (e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Meta') {
+      // Clear smart transform tracker when typing other navigation keys
+      if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key === 'PageUp' || e.key === 'PageDown') {
+        lastSmartTransformRef.current = null;
+      }
+    }
+
+    // 2. Smart Double & Single Quotes outside codeblocks
+    if ((e.key === '"' || e.key === "'") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const quoteRes = handleSmartQuote(localValue, textarea.selectionStart, textarea.selectionEnd, e.key as '"' | "'");
+        if (quoteRes) {
+          e.preventDefault();
+          setLocalValue(quoteRes.newText);
+          lastSmartTransformRef.current = quoteRes.record;
+          notifyParent(quoteRes.newText, false);
+
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = quoteRes.newCursor;
+            }
+          }, 0);
+          return;
+        }
+      }
+    }
+
+    // Escape closes Find bar if open
+    if (e.key === 'Escape' && isFindOpen) {
+      e.preventDefault();
+      setIsFindOpen(false);
+      return;
+    }
+
+    // Tab key indent support (2 spaces)
     if (e.key === 'Tab') {
       e.preventDefault();
       const textarea = textareaRef.current;
       if (!textarea) return;
+
+      recordCurrentStateForHistory();
 
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
 
       const newValue = localValue.substring(0, start) + '  ' + localValue.substring(end);
       setLocalValue(newValue);
+      lastSnapshotValueRef.current = newValue;
       notifyParent(newValue, true);
 
       setTimeout(() => {
         textarea.selectionStart = textarea.selectionEnd = start + 2;
       }, 0);
+      return;
     }
 
-    // Markdown Shortcut handlers: Ctrl+B, Ctrl+I, Ctrl+K
+    // Keyboard Shortcuts with Ctrl / Cmd
     if (e.ctrlKey || e.metaKey) {
+      // Undo: Ctrl+Z / Cmd+Z
+      if ((e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+        if (onUndo) {
+          e.preventDefault();
+          onUndo();
+          return;
+        }
+      }
+
+      // Redo: Ctrl+Shift+Z / Cmd+Shift+Z / Ctrl+Y
+      if (((e.key === 'z' || e.key === 'Z') && e.shiftKey) || e.key === 'y' || e.key === 'Y') {
+        if (onRedo) {
+          e.preventDefault();
+          onRedo();
+          return;
+        }
+      }
+
+      // Find: Ctrl+F / Cmd+F
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        const textarea = textareaRef.current;
+        if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+          const selected = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+          if (selected && !selected.includes('\n')) {
+            setFindQuery(selected);
+          }
+        }
+        setIsFindOpen(true);
+        return;
+      }
+
+      // Replace: Ctrl+H / Cmd+H
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        const textarea = textareaRef.current;
+        if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+          const selected = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+          if (selected && !selected.includes('\n')) {
+            setFindQuery(selected);
+          }
+        }
+        setIsFindOpen(true);
+        setShowReplace(true);
+        return;
+      }
+
+      // Bold: Ctrl+B
       if (e.key === 'b' || e.key === 'B') {
         e.preventDefault();
-        insertWrap('**', '**');
-      } else if (e.key === 'i' || e.key === 'I') {
+        insertWrap('**', '**', 'bold text');
+        return;
+      }
+
+      // Italic: Ctrl+I
+      if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();
-        insertWrap('*', '*');
-      } else if (e.key === 'k' || e.key === 'K') {
+        insertWrap('*', '*', 'italic text');
+        return;
+      }
+
+      // Hyperlink: Ctrl+K
+      if (e.key === 'k' || e.key === 'K') {
         e.preventDefault();
-        insertWrap('[', '](url)');
+        insertWrap('[', '](https://example.com)', 'link text');
+        return;
       }
     }
   };
@@ -149,52 +633,8 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     }
   };
 
-  // Helper to wrap selected text with markdown tokens
-  const insertWrap = (before: string, after: string, defaultText = 'text') => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = localValue.substring(start, end) || defaultText;
-
-    const replacement = `${before}${selectedText}${after}`;
-    const newValue = localValue.substring(0, start) + replacement + localValue.substring(end);
-    setLocalValue(newValue);
-    notifyParent(newValue, true);
-
-    setTimeout(() => {
-      textarea.focus();
-      textarea.selectionStart = start + before.length;
-      textarea.selectionEnd = start + before.length + selectedText.length;
-    }, 0);
-  };
-
-  // Insert block template
-  const insertBlock = (block: string) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    
-    // Add newlines around block if needed
-    const prefix = start > 0 && localValue[start - 1] !== '\n' ? '\n\n' : '\n';
-    const suffix = end < localValue.length && localValue[end] !== '\n' ? '\n\n' : '\n';
-
-    const newValue = localValue.substring(0, start) + prefix + block + suffix + localValue.substring(end);
-    setLocalValue(newValue);
-    notifyParent(newValue, true);
-
-    setTimeout(() => {
-      textarea.focus();
-      const newPos = start + prefix.length + block.length;
-      textarea.selectionStart = textarea.selectionEnd = newPos;
-    }, 0);
-  };
-
   // Insert Callout Admonition
-  const insertCallout = (type: 'NOTE' | 'TIP' | 'WARNING' | 'IMPORTANT') => {
+  const insertCallout = (type: 'NOTE' | 'TIP' | 'WARNING') => {
     const template = `> [!${type}] Callout Title\n> Write your highlighted message or guidance here.`;
     insertBlock(template);
   };
@@ -217,13 +657,45 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     >
       {/* Markdown Toolbar */}
       <div 
-        className="no-print flex items-center justify-between px-3 py-1.5 border-b overflow-x-auto gap-1 shrink-0 scrollbar-none select-none text-xs"
+        className="no-print flex items-center justify-between px-3 py-1.5 border-b gap-1 shrink-0 select-none text-xs relative z-30 overflow-visible"
         style={{
           borderColor: theme.border,
           backgroundColor: theme.bgSecondary,
         }}
       >
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-0.5 overflow-visible">
+          {/* Undo / Redo controls */}
+          {onUndo && (
+            <button
+              type="button"
+              onClick={onUndo}
+              disabled={!canUndo}
+              className={`p-1.5 rounded transition-colors cursor-pointer ${
+                canUndo ? 'hover:bg-stone-500/10 opacity-90' : 'opacity-30 cursor-not-allowed'
+              }`}
+              title="Undo (Ctrl+Z)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onRedo && (
+            <button
+              type="button"
+              onClick={onRedo}
+              disabled={!canRedo}
+              className={`p-1.5 rounded transition-colors cursor-pointer ${
+                canRedo ? 'hover:bg-stone-500/10 opacity-90' : 'opacity-30 cursor-not-allowed'
+              }`}
+              title="Redo (Ctrl+Shift+Z / Ctrl+Y)"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {(onUndo || onRedo) && (
+            <span className="w-px h-4 bg-stone-300 dark:bg-stone-700 mx-1" />
+          )}
+
           {/* Headings */}
           <button
             type="button"
@@ -286,38 +758,125 @@ export const Editor: React.FC<EditorProps> = React.memo(({
             ==
           </button>
 
+          {/* Case Style Dropdown */}
+          <div className="relative inline-block" ref={caseMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsCaseMenuOpen((prev) => !prev)}
+              className={`flex items-center gap-0.5 px-1.5 py-1 rounded transition-colors cursor-pointer font-medium ${
+                isCaseMenuOpen ? 'bg-stone-500/20' : 'hover:bg-stone-500/10'
+              }`}
+              title="Change Case Style (Sentence, Title, UPPER, lower, camelCase...)"
+            >
+              <Type className="w-3.5 h-3.5" />
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+
+            {isCaseMenuOpen && (
+              <div 
+                className="absolute left-0 top-full mt-1.5 w-44 rounded-lg shadow-2xl border py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100"
+                style={{
+                  backgroundColor: theme.bgElevated,
+                  borderColor: theme.border,
+                  color: theme.text,
+                }}
+              >
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider opacity-50 border-b pb-1 mb-1" style={{ borderColor: theme.border }}>
+                  Case Transform
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('sentence')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Sentence Case</span>
+                  <span className="text-[10px] opacity-50 font-mono">Aa bb</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('title')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Title Case</span>
+                  <span className="text-[10px] opacity-50 font-mono">Aa Bb</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('upper')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>UPPERCASE</span>
+                  <span className="text-[10px] opacity-50 font-mono">AA BB</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('lower')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>smallcase</span>
+                  <span className="text-[10px] opacity-50 font-mono">aa bb</span>
+                </button>
+                <div className="my-1 border-t opacity-40" style={{ borderColor: theme.border }} />
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('camel')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>camelCase</span>
+                  <span className="text-[10px] opacity-50 font-mono">aaBb</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('kebab')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>kebab-case</span>
+                  <span className="text-[10px] opacity-50 font-mono">aa-bb</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCaseTransform('snake')}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>snake_case</span>
+                  <span className="text-[10px] opacity-50 font-mono">aa_bb</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <span className="w-px h-4 bg-stone-300 dark:bg-stone-700 mx-1" />
 
-          {/* Lists and Quotes */}
+          {/* Lists and Quotes (Multi-line & direct toggle/switch capable) */}
           <button
             type="button"
-            onClick={() => insertWrap('- ', '', 'List item')}
+            onClick={() => handleListTransform('bullet')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
-            title="Bullet List"
+            title="Bullet List (Toggle / Switch Checklist / Multi-line)"
           >
             <List className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
-            onClick={() => insertWrap('1. ', '', 'Numbered item')}
+            onClick={() => handleListTransform('numbered')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
-            title="Numbered List"
+            title="Numbered List (Toggle / Number sequential lines)"
           >
             <ListOrdered className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
-            onClick={() => insertWrap('- [ ] ', '', 'Task item')}
+            onClick={() => handleListTransform('checklist')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
-            title="Task Checklist"
+            title="Checklist (Toggle / Switch Bullet List / Multi-line)"
           >
             <CheckSquare className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
-            onClick={() => insertWrap('> ', '', 'Quote statement')}
+            onClick={() => handleListTransform('quote')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
-            title="Blockquote"
+            title="Blockquote (Toggle / Multi-line)"
           >
             <Quote className="w-3.5 h-3.5" />
           </button>
@@ -359,9 +918,9 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           </button>
           <button
             type="button"
-            onClick={insertTable}
-            className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
-            title="Insert Table"
+            onClick={() => setIsTableBuilderOpen(true)}
+            className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer text-amber-600 dark:text-amber-400 font-semibold"
+            title="Visual Table Builder & Generator"
           >
             <Table className="w-3.5 h-3.5" />
           </button>
@@ -375,6 +934,14 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           </button>
           <button
             type="button"
+            onClick={() => insertBlock('```mermaid\ngraph TD\n  A[Start] --> B{Decision}\n  B -->|Yes| C[Output Result]\n  B -->|No| D[Iterate / Fix]\n```')}
+            className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1"
+            title="Insert Mermaid.js Diagram (```mermaid)"
+          >
+            <Workflow className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
             onClick={() => insertBlock('---\n')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
             title="Divider / Slide Break (---)"
@@ -383,8 +950,31 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           </button>
         </div>
 
-        {/* Admonition Callout quick inserts */}
+        {/* Find/Replace & Admonition Callout quick inserts */}
         <div className="flex items-center gap-1">
+          {/* Find & Replace button */}
+          <button
+            type="button"
+            onClick={() => {
+              if (isFindOpen) {
+                setIsFindOpen(false);
+              } else {
+                setIsFindOpen(true);
+                setShowReplace(false);
+              }
+            }}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+              isFindOpen ? 'bg-amber-500/20 text-amber-600 border-amber-500 font-semibold' : 'hover:bg-stone-500/10'
+            }`}
+            style={{ borderColor: isFindOpen ? theme.accent : theme.border }}
+            title="Find & Replace (Ctrl+F / Ctrl+H)"
+          >
+            <Search className="w-3 h-3" />
+            <span className="hidden sm:inline">Find</span>
+          </button>
+
+          <span className="w-px h-3.5 bg-stone-300 dark:bg-stone-700 mx-0.5" />
+
           <button
             type="button"
             onClick={() => insertCallout('NOTE')}
@@ -412,8 +1002,46 @@ export const Editor: React.FC<EditorProps> = React.memo(({
         </div>
       </div>
 
-      {/* Editor Main Text Area */}
+      {/* Editor Main Text Area & Find/Replace Overlay */}
       <div className="flex-1 relative flex overflow-hidden">
+        {/* Floating Find & Replace Overlay Bar */}
+        <FindReplaceBar
+          isOpen={isFindOpen}
+          showReplace={showReplace}
+          onToggleShowReplace={() => setShowReplace(!showReplace)}
+          onClose={() => setIsFindOpen(false)}
+          theme={theme}
+          findQuery={findQuery}
+          onFindQueryChange={(q) => setFindQuery(q)}
+          replaceQuery={replaceQuery}
+          onReplaceQueryChange={(r) => setReplaceQuery(r)}
+          matchCase={matchCase}
+          onToggleMatchCase={() => setMatchCase(!matchCase)}
+          matchWholeWord={matchWholeWord}
+          onToggleWholeWord={() => setMatchWholeWord(!matchWholeWord)}
+          currentMatchIndex={matches.length > 0 ? currentMatchIdx + 1 : 0}
+          totalMatches={matches.length}
+          onFindNext={handleFindNext}
+          onFindPrev={handleFindPrev}
+          onReplaceCurrent={handleReplaceCurrent}
+          onReplaceAll={handleReplaceAll}
+          matches={matches}
+          totalLength={localValue.length}
+          onSelectMatch={(idx) => highlightMatch(idx)}
+        />
+
+        {/* Scrollbar Minimap Ruler for occurrence density & instant jumping */}
+        {isFindOpen && matches.length > 0 && (
+          <SearchMinimapRuler
+            matches={matches}
+            currentMatchIndex={currentMatchIdx}
+            totalLength={localValue.length}
+            text={localValue}
+            onSelectMatch={(idx) => highlightMatch(idx)}
+            theme={theme}
+          />
+        )}
+
         <textarea
           ref={textareaRef}
           value={localValue}
@@ -429,6 +1057,14 @@ export const Editor: React.FC<EditorProps> = React.memo(({
             caretColor: theme.accent,
             willChange: 'scroll-position',
           }}
+        />
+
+        {/* Visual Markdown Table Generator & Cell Editor Modal */}
+        <TableBuilderModal
+          isOpen={isTableBuilderOpen}
+          onClose={() => setIsTableBuilderOpen(false)}
+          onInsertTable={(tableMd) => insertBlock(tableMd)}
+          theme={theme}
         />
       </div>
 

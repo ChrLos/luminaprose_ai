@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { ThemeConfig, TypographySettings } from '../types';
+import { KATEX_OFFLINE_CSS } from './katexOfflineStyles';
 
 export interface PdfExportOptions {
   title: string;
@@ -56,6 +57,8 @@ export async function generateDirectPdf({
 
     // 100% Exact 1:1 Prose Typography stylesheet for PDF
     const pureCss = `
+      ${KATEX_OFFLINE_CSS}
+
       *, *::before, *::after {
         box-sizing: border-box;
       }

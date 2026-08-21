@@ -15,6 +15,8 @@ import {
   Info,
 } from 'lucide-react';
 import { DocumentItem, ThemeConfig } from '../types';
+import { VirtualList } from './VirtualList';
+import { useFocusTrap } from '../utils/useFocusTrap';
 
 export interface DocumentSnapshot {
   id: string;
@@ -277,6 +279,8 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
   const [restoreSuccess, setRestoreSuccess] = useState(false);
   const [expandedFolds, setExpandedFolds] = useState<Record<string, boolean>>({});
 
+  const drawerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
+
   // Sync / Persist Snapshots to LocalStorage
   useEffect(() => {
     try {
@@ -415,12 +419,16 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
       <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
 
       <div
+        ref={drawerRef}
         className="relative w-full max-w-xl sm:max-w-2xl h-full border-l shadow-2xl flex flex-col z-10 select-none animate-in slide-in-from-right duration-200"
         style={{
           backgroundColor: theme.bgSecondary,
           borderColor: theme.border,
           color: theme.text,
         }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Version History & Snapshots"
       >
         {/* Header Bar */}
         <div
@@ -539,73 +547,80 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
 
         {/* Content Body: Left Timeline / Right Diff Preview */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Snapshots Sidebar */}
+          {/* Snapshots Sidebar with Virtualization */}
           <div
-            className="w-1/2 border-r overflow-y-auto p-3 space-y-2 shrink-0 custom-vhd-scrollbar"
+            className="w-1/2 border-r h-full overflow-hidden shrink-0 flex flex-col"
             style={{ borderColor: theme.border }}
           >
             {currentDocSnapshots.length === 0 ? (
-              <div className="py-12 text-center text-xs opacity-60 space-y-2">
+              <div className="py-12 px-4 text-center text-xs opacity-60 space-y-2">
                 <Clock className="w-6 h-6 mx-auto opacity-40" />
                 <p>No snapshots recorded yet.</p>
                 <p className="text-[11px]">Revisions will automatically save as you write!</p>
               </div>
             ) : (
-              currentDocSnapshots.map((snap) => {
-                const isSelected = selectedSnapshot?.id === snap.id;
-                const isCurrent = snap.content === currentDoc.content;
+              <VirtualList<DocumentSnapshot>
+                items={currentDocSnapshots}
+                itemHeight={96}
+                overscan={4}
+                className="p-3 custom-vhd-scrollbar"
+                renderItem={(snap) => {
+                  const isSelected = selectedSnapshot?.id === snap.id;
+                  const isCurrent = snap.content === currentDoc.content;
 
-                return (
-                  <div
-                    key={snap.id}
-                    onClick={() => setSelectedSnapshotId(snap.id)}
-                    className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                      isSelected ? 'shadow-xs' : 'opacity-80 hover:opacity-100'
-                    }`}
-                    style={{
-                      borderColor: isSelected ? theme.accent : theme.border,
-                      backgroundColor: isSelected ? theme.bgElevated : theme.bg,
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`text-[10px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wider border ${
-                          snap.type === 'manual'
-                            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400'
-                            : 'border-stone-400/40 opacity-70'
+                  return (
+                    <div className="pb-2 h-full">
+                      <div
+                        onClick={() => setSelectedSnapshotId(snap.id)}
+                        className={`p-2.5 rounded-lg border cursor-pointer transition-all h-full flex flex-col justify-between ${
+                          isSelected ? 'shadow-xs' : 'opacity-80 hover:opacity-100'
                         }`}
+                        style={{
+                          borderColor: isSelected ? theme.accent : theme.border,
+                          backgroundColor: isSelected ? theme.bgElevated : theme.bg,
+                        }}
                       >
-                        {snap.type === 'manual' ? 'CHECKPOINT' : 'AUTO-SAVE'}
-                      </span>
-
-                      <div className="flex items-center gap-1">
-                        {isCurrent && (
-                          <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            Current
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wider border ${
+                              snap.type === 'manual'
+                                ? 'border-amber-500/50 text-amber-600 dark:text-amber-400'
+                                : 'border-stone-400/40 opacity-70'
+                            }`}
+                          >
+                            {snap.type === 'manual' ? 'CHECKPOINT' : 'AUTO-SAVE'}
                           </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteSnapshot(snap.id, e)}
-                          className="p-1 rounded opacity-40 hover:opacity-100 hover:text-red-500 cursor-pointer transition-opacity"
-                          title="Delete snapshot"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+
+                          <div className="flex items-center gap-1">
+                            {isCurrent && (
+                              <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                Current
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteSnapshot(snap.id, e)}
+                              className="p-1 rounded opacity-40 hover:opacity-100 hover:text-red-500 cursor-pointer transition-opacity"
+                              title="Delete snapshot"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="font-semibold text-xs truncate">
+                          {snap.label || snap.title}
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] opacity-60">
+                          <span>{new Date(snap.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span>{snap.wordCount} words</span>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="font-semibold text-xs mt-1.5 truncate">
-                      {snap.label || snap.title}
-                    </div>
-
-                    <div className="flex items-center justify-between text-[11px] opacity-60 mt-1">
-                      <span>{new Date(snap.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      <span>{snap.wordCount} words</span>
-                    </div>
-                  </div>
-                );
-              })
+                  );
+                }}
+              />
             )}
           </div>
 

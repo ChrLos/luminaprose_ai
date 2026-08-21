@@ -20,10 +20,12 @@ import {
   ReadabilityMetrics, 
   TocHeading 
 } from '../types';
-import { parseMarkdownToHtml, extractHeadings } from '../utils/markdownParser';
+import { parseMarkdownToHtml, extractHeadings, clearParseCache } from '../utils/markdownParser';
 import { calculateReadability } from '../utils/readability';
 import { applyBionicReading } from '../utils/bionicReader';
 import { DocumentNarrator, SpeechState } from '../utils/speechNarrator';
+import { renderMermaidInContainer, subscribeMermaidUpdates } from '../utils/mermaidRenderer';
+import { MermaidViewerModal } from './MermaidViewerModal';
 
 interface PreviewProps {
   markdown: string;
@@ -61,6 +63,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
   const [activeHeadingText, setActiveHeadingText] = useState<string>('');
   const [zoomedImage, setZoomedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [viewingMermaid, setViewingMermaid] = useState<{ rawCode: string; svgHtml: string } | null>(null);
   const [copiedCodeToast, setCopiedCodeToast] = useState<string | null>(null);
   const [guideY, setGuideY] = useState<number | null>(null);
 
@@ -118,13 +121,20 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
     }
   }, [deferredMarkdown]);
 
-  // Parse HTML cleanly with KaTeX and syntax highlighting
-  const rawParsedHtml = useMemo(() => {
-    return parseMarkdownToHtml(deferredMarkdown, {
-      highlightSyntax: settings.highlightSyntax,
-      showLineNumbers: settings.showLineNumbers,
+  // Subscribe to background Mermaid renders so diagrams update seamlessly in virtual DOM
+  const [mermaidVersion, setMermaidVersion] = useState(0);
+
+  useEffect(() => {
+    return subscribeMermaidUpdates(() => {
+      clearParseCache();
+      setMermaidVersion((v) => v + 1);
     });
-  }, [deferredMarkdown, settings.highlightSyntax, settings.showLineNumbers]);
+  }, []);
+
+  // Parse HTML cleanly with KaTeX, syntax highlighting, and SVG Mermaid diagrams
+  const rawParsedHtml = useMemo(() => {
+    return parseMarkdownToHtml(deferredMarkdown, theme.category === 'dark', true);
+  }, [deferredMarkdown, theme.category, mermaidVersion]);
 
   // Apply Bionic Reading if toggled on (without touching math/code)
   const parsedHtml = useMemo(() => {
@@ -134,6 +144,15 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
 
   // Headings for Table of Contents
   const headings = useMemo(() => extractHeadings(deferredMarkdown), [deferredMarkdown]);
+
+  // Render Mermaid diagrams when markdown changes or unrendered diagrams are in view
+  useEffect(() => {
+    renderMermaidInContainer(containerRef.current, theme.category === 'dark');
+    const timer = setTimeout(() => {
+      renderMermaidInContainer(containerRef.current, theme.category === 'dark');
+    }, 40);
+    return () => clearTimeout(timer);
+  }, [parsedHtml, theme.category]);
 
   // Readability metrics (efficient calculation)
   const readability: ReadabilityMetrics = useMemo(
@@ -168,7 +187,19 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
       setZoomedImage({ src, alt });
     };
 
-    // 3. Task Item Checkbox Handler (Indexed for 100% formatting and duplicate resilience)
+    // 3. Mermaid Diagram Pan & Zoom Modal Handler
+    (window as any).__openMermaidViewer = (btn: HTMLElement) => {
+      const codeEncoded = btn.getAttribute('data-code');
+      const wrapper = btn.closest('.mermaid-block-wrapper');
+      const diagramEl = wrapper ? wrapper.querySelector('.mermaid-diagram') : null;
+      const svgHtml = diagramEl ? diagramEl.innerHTML : '';
+      const rawCode = codeEncoded ? decodeURIComponent(codeEncoded) : '';
+      if (rawCode) {
+        setViewingMermaid({ rawCode, svgHtml });
+      }
+    };
+
+    // 4. Task Item Checkbox Handler (Indexed for 100% formatting and duplicate resilience)
     (window as any).__toggleTaskItem = (checkbox: HTMLInputElement) => {
       const taskIdxStr = checkbox.getAttribute('data-task-index');
       if (taskIdxStr === null) return;
@@ -201,6 +232,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
     return () => {
       delete (window as any).__copyCodeBlock;
       delete (window as any).__zoomImage;
+      delete (window as any).__openMermaidViewer;
       delete (window as any).__toggleTaskItem;
     };
   }, [markdown, onUpdateMarkdown]);
@@ -832,6 +864,17 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Mermaid Diagram Interactive Viewer Modal */}
+      {viewingMermaid && (
+        <MermaidViewerModal
+          isOpen={Boolean(viewingMermaid)}
+          onClose={() => setViewingMermaid(null)}
+          rawCode={viewingMermaid.rawCode}
+          svgHtml={viewingMermaid.svgHtml}
+          theme={theme}
+        />
       )}
 
       {/* Toast Notification */}

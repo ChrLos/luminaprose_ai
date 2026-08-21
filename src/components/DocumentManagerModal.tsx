@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { DocumentItem, ThemeConfig } from '../types';
 import { SAMPLE_DOCUMENTS } from '../utils/samples';
+import { useFocusTrap } from '../utils/useFocusTrap';
 
 interface DocumentManagerModalProps {
   isOpen: boolean;
@@ -42,13 +43,14 @@ export const DocumentManagerModal: React.FC<DocumentManagerModalProps> = ({
   onLoadSample,
   theme,
 }) => {
-  if (!isOpen) return null;
-
+  const modalRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  if (!isOpen) return null;
 
   const handleStartRename = (doc: DocumentItem) => {
     setEditingId(doc.id);
@@ -114,12 +116,16 @@ export const DocumentManagerModal: React.FC<DocumentManagerModalProps> = ({
       />
 
       <div 
+        ref={modalRef}
         className="relative max-w-xl w-full rounded-2xl shadow-2xl border p-6 z-10 space-y-6 max-h-[88vh] flex flex-col"
         style={{
           backgroundColor: theme.bg,
           borderColor: theme.border,
           color: theme.text,
         }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Documents & Library"
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b pb-4 shrink-0" style={{ borderColor: theme.border }}>

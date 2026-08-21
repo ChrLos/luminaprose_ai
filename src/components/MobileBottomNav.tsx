@@ -122,7 +122,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             onClick={onOpenCommandPalette}
             className="p-2 rounded-full transition-all opacity-70 hover:opacity-100 hover:scale-105 active:scale-95 cursor-pointer shrink-0"
             style={{ color: theme.text }}
-            title="Search & Command Palette (⌘K)"
+            title="Search & Command Palette (⌘P)"
           >
             <Search className="w-4 h-4 shrink-0" />
           </button>

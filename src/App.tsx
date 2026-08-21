@@ -21,7 +21,10 @@ import { PresentationView } from './components/PresentationView';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { VersionHistoryDrawer } from './components/VersionHistoryDrawer';
 import { MobileBottomNav } from './components/MobileBottomNav';
+import { ChangelogModal } from './components/ChangelogModal';
 import { ambientAudio } from './utils/ambientAudio';
+
+const CURRENT_APP_VERSION = 'v1.1.0';
 
 const STORAGE_KEYS = {
   DOCS: 'lumina_markdown_documents_v1',
@@ -30,6 +33,7 @@ const STORAGE_KEYS = {
   THEME: 'lumina_markdown_theme_v1',
   VIEW: 'lumina_markdown_view_v1',
   KEY_SOUND: 'lumina_markdown_key_sound_v1',
+  CHANGELOG_SEEN_VERSION: 'lumina_markdown_changelog_seen_v1_1_0',
 };
 
 const DEFAULT_SETTINGS: TypographySettings = {
@@ -54,12 +58,24 @@ const DEFAULT_SETTINGS: TypographySettings = {
   paperTexture: false,
 };
 
+interface HistorySnapshot {
+  content: string;
+  selStart?: number;
+  selEnd?: number;
+  timestamp: number;
+}
+
 export default function App() {
   // 1. Documents state
   const [documents, setDocuments] = useState<DocumentItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.DOCS);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.id && parsed[0]?.content !== undefined) {
+          return parsed;
+        }
+      }
     } catch {
       // Fallback
     }
@@ -73,11 +89,17 @@ export default function App() {
     } catch {
       // Fallback
     }
-    return SAMPLE_DOCUMENTS[0].id;
+    return documents[0]?.id || SAMPLE_DOCUMENTS[0].id;
   });
 
-  // Current Active Document
-  const currentDoc = documents.find((d) => d.id === currentDocId) || documents[0] || SAMPLE_DOCUMENTS[0];
+  // Current Active Document with guarantee against undefined
+  const currentDoc = useMemo(() => {
+    return documents.find((d) => d.id === currentDocId) || documents[0] || SAMPLE_DOCUMENTS[0];
+  }, [documents, currentDocId]);
+
+  // Persistent Undo / Redo History Stack across views and toolbar clicks
+  const docHistoryRef = useRef<Record<string, { past: HistorySnapshot[]; future: HistorySnapshot[] }>>({});
+  const [, setHistoryVersion] = useState(0);
 
   // 2. Settings & Themes state
   const [themeId, setThemeId] = useState<ThemeId>(() => {
@@ -120,6 +142,18 @@ export default function App() {
   });
 
   // 3. Modals & Drawers state
+  const [isChangelogOpen, setIsChangelogOpen] = useState<boolean>(() => {
+    try {
+      const seen = localStorage.getItem(STORAGE_KEYS.CHANGELOG_SEEN_VERSION);
+      if (seen !== CURRENT_APP_VERSION) {
+        localStorage.setItem(STORAGE_KEYS.CHANGELOG_SEEN_VERSION, CURRENT_APP_VERSION);
+        return true;
+      }
+    } catch {
+      // Fallback
+    }
+    return false;
+  });
   const [isTypographyOpen, setIsTypographyOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isDocManagerOpen, setIsDocManagerOpen] = useState(false);
@@ -178,35 +212,160 @@ export default function App() {
     } catch {}
   }, [playTypewriterSound]);
 
+  // Record history snapshot helper
+  const handleRecordHistory = useCallback((beforeContent: string, selStart?: number, selEnd?: number) => {
+    if (!docHistoryRef.current[currentDocId]) {
+      docHistoryRef.current[currentDocId] = { past: [], future: [] };
+    }
+    const hist = docHistoryRef.current[currentDocId];
+    const lastEntry = hist.past[hist.past.length - 1];
+    
+    // Avoid saving identical content or undefined content
+    if (beforeContent !== undefined && (!lastEntry || lastEntry.content !== beforeContent)) {
+      hist.past.push({
+        content: beforeContent,
+        selStart,
+        selEnd,
+        timestamp: Date.now(),
+      });
+      if (hist.past.length > 150) {
+        hist.past.shift();
+      }
+      hist.future = [];
+      setHistoryVersion((v) => v + 1);
+    }
+  }, [currentDocId]);
+
+  // Undo handler
+  const handleUndo = useCallback(() => {
+    const hist = docHistoryRef.current[currentDocId];
+    if (!hist || hist.past.length === 0) return;
+
+    // Pop until we find a snapshot that differs from the current document content
+    let previousSnapshot = hist.past.pop();
+    while (previousSnapshot && previousSnapshot.content === currentDoc.content && hist.past.length > 0) {
+      previousSnapshot = hist.past.pop();
+    }
+
+    if (!previousSnapshot || previousSnapshot.content === currentDoc.content) {
+      setHistoryVersion((v) => v + 1);
+      return;
+    }
+
+    hist.future.push({
+      content: currentDoc.content,
+      timestamp: Date.now(),
+    });
+
+    setDocuments((prev) =>
+      prev.map((doc) =>
+        doc.id === currentDocId
+          ? { ...doc, content: previousSnapshot.content, updatedAt: Date.now() }
+          : doc
+      )
+    );
+    setHistoryVersion((v) => v + 1);
+  }, [currentDocId, currentDoc.content]);
+
+  // Redo handler
+  const handleRedo = useCallback(() => {
+    const hist = docHistoryRef.current[currentDocId];
+    if (!hist || hist.future.length === 0) return;
+
+    let nextSnapshot = hist.future.pop();
+    while (nextSnapshot && nextSnapshot.content === currentDoc.content && hist.future.length > 0) {
+      nextSnapshot = hist.future.pop();
+    }
+
+    if (!nextSnapshot || nextSnapshot.content === currentDoc.content) {
+      setHistoryVersion((v) => v + 1);
+      return;
+    }
+
+    hist.past.push({
+      content: currentDoc.content,
+      timestamp: Date.now(),
+    });
+
+    setDocuments((prev) =>
+      prev.map((doc) =>
+        doc.id === currentDocId
+          ? { ...doc, content: nextSnapshot.content, updatedAt: Date.now() }
+          : doc
+      )
+    );
+    setHistoryVersion((v) => v + 1);
+  }, [currentDocId, currentDoc.content]);
+
+  const canUndo = (docHistoryRef.current[currentDocId]?.past.length || 0) > 0;
+  const canRedo = (docHistoryRef.current[currentDocId]?.future.length || 0) > 0;
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
-        if (e.key === 'k' || e.key === 'K') {
+      if (e.ctrlKey || e.metaKey) {
+        // Command Palette: Ctrl+P / Cmd+P
+        if (!e.shiftKey && (e.key === 'p' || e.key === 'P')) {
           e.preventDefault();
           setIsCommandPaletteOpen((prev) => !prev);
-        } else if (e.key === '1') {
+          return;
+        }
+
+        // Global Undo/Redo: Prevent when in input, textarea, modal dialog, or any open overlay
+        const activeEl = document.activeElement as HTMLElement | null;
+        const activeTag = activeEl?.tagName.toLowerCase();
+        const isInsideInput = activeTag === 'textarea' || activeTag === 'input' || activeTag === 'select' || Boolean(activeEl?.isContentEditable);
+        const isInsideDialog = Boolean(activeEl?.closest('[role="dialog"], [aria-modal="true"]'));
+        const isAnyModalOpen =
+          isCommandPaletteOpen ||
+          isDocManagerOpen ||
+          isExportOpen ||
+          isAmbientOpen ||
+          isShortcutsOpen ||
+          isHistoryOpen ||
+          isTypographyOpen;
+
+        if (isInsideInput || isInsideDialog || isAnyModalOpen) {
+          // Allow native browser undo/redo inside inputs/modals without mutating parent doc history
+          return;
+        }
+
+        // Global Undo: Ctrl+Z / Cmd+Z
+        if (!e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
           e.preventDefault();
-          setViewLayout('split');
-        } else if (e.key === '2') {
+          handleUndo();
+          return;
+        }
+
+        // Global Redo: Ctrl+Shift+Z / Cmd+Shift+Z / Ctrl+Y
+        if (((e.key === 'z' || e.key === 'Z') && e.shiftKey) || (!e.shiftKey && (e.key === 'y' || e.key === 'Y'))) {
           e.preventDefault();
-          setViewLayout('reader');
-        } else if (e.key === '3') {
-          e.preventDefault();
-          setViewLayout('editor');
-        } else if (e.key === 'p' || e.key === 'P') {
-          e.preventDefault();
-          setIsExportOpen(true);
-        } else if (e.key === '/') {
-          e.preventDefault();
-          setIsShortcutsOpen(true);
+          handleRedo();
+          return;
+        }
+
+        // View Modes
+        if (!e.shiftKey) {
+          if (e.key === '1') {
+            e.preventDefault();
+            setViewLayout('split');
+          } else if (e.key === '2') {
+            e.preventDefault();
+            setViewLayout('reader');
+          } else if (e.key === '3') {
+            e.preventDefault();
+            setViewLayout('editor');
+          } else if (e.key === '/') {
+            e.preventDefault();
+            setIsShortcutsOpen(true);
+          }
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handleUndo, handleRedo]);
 
   // Update Markdown content in current document
   const handleUpdateContent = useCallback((newContent: string) => {
@@ -220,7 +379,7 @@ export default function App() {
   }, [currentDocId]);
 
   // Create new blank document
-  const handleCreateDocument = () => {
+  const handleCreateDocument = useCallback(() => {
     const newDoc: DocumentItem = {
       id: 'doc-' + Date.now(),
       title: 'Untitled Note ' + (documents.length + 1),
@@ -229,37 +388,38 @@ export default function App() {
     };
     setDocuments((prev) => [newDoc, ...prev]);
     setCurrentDocId(newDoc.id);
-  };
+  }, [documents.length]);
 
   // Delete Document
-  const handleDeleteDocument = (id: string) => {
-    if (documents.length <= 1) {
-      const newDoc: DocumentItem = {
-        id: 'doc-' + Date.now(),
-        title: 'Untitled Note 1',
-        content: '# Untitled Note\n\nStart writing your thoughts...',
-        updatedAt: Date.now(),
-      };
-      setDocuments([newDoc]);
-      setCurrentDocId(newDoc.id);
-      return;
-    }
-    const remaining = documents.filter((d) => d.id !== id);
-    setDocuments(remaining);
-    if (currentDocId === id) {
-      setCurrentDocId(remaining[0].id);
-    }
-  };
+  const handleDeleteDocument = useCallback((id: string) => {
+    setDocuments((prev) => {
+      if (prev.length <= 1) {
+        const newDoc: DocumentItem = {
+          id: 'doc-' + Date.now(),
+          title: 'Untitled Note 1',
+          content: '# Untitled Note\n\nStart writing your thoughts...',
+          updatedAt: Date.now(),
+        };
+        setCurrentDocId(newDoc.id);
+        return [newDoc];
+      }
+      const remaining = prev.filter((d) => d.id !== id);
+      if (currentDocId === id && remaining.length > 0) {
+        setCurrentDocId(remaining[0].id);
+      }
+      return remaining;
+    });
+  }, [currentDocId]);
 
   // Rename Document
-  const handleRenameDocument = (id: string, newTitle: string) => {
+  const handleRenameDocument = useCallback((id: string, newTitle: string) => {
     setDocuments((prev) =>
       prev.map((doc) => (doc.id === id ? { ...doc, title: newTitle } : doc))
     );
-  };
+  }, []);
 
   // Import Document from File
-  const handleImportDocument = (title: string, content: string) => {
+  const handleImportDocument = useCallback((title: string, content: string) => {
     const newDoc: DocumentItem = {
       id: 'doc-' + Date.now(),
       title,
@@ -268,29 +428,31 @@ export default function App() {
     };
     setDocuments((prev) => [newDoc, ...prev]);
     setCurrentDocId(newDoc.id);
-  };
+  }, []);
 
   // Load Preset Sample
-  const handleLoadSample = (sample: DocumentItem) => {
-    // Check if sample already in documents, else create copy
-    const existing = documents.find((d) => d.id === sample.id);
-    if (existing) {
-      setCurrentDocId(sample.id);
-    } else {
-      const sampleCopy: DocumentItem = {
-        ...sample,
-        id: 'sample-' + Date.now(),
-        updatedAt: Date.now(),
-      };
-      setDocuments((prev) => [sampleCopy, ...prev]);
-      setCurrentDocId(sampleCopy.id);
-    }
-  };
+  const handleLoadSample = useCallback((sample: DocumentItem) => {
+    setDocuments((prev) => {
+      const existing = prev.find((d) => d.id === sample.id);
+      if (existing) {
+        setCurrentDocId(sample.id);
+        return prev;
+      } else {
+        const sampleCopy: DocumentItem = {
+          ...sample,
+          id: 'sample-' + Date.now(),
+          updatedAt: Date.now(),
+        };
+        setCurrentDocId(sampleCopy.id);
+        return [sampleCopy, ...prev];
+      }
+    });
+  }, []);
 
   // Settings update helper
-  const handleUpdateSettings = (newSettings: Partial<TypographySettings>) => {
+  const handleUpdateSettings = useCallback((newSettings: Partial<TypographySettings>) => {
     setSettings((prev) => ({ ...prev, ...newSettings }));
-  };
+  }, []);
 
   // Extract Headings for Section-Aware Scroll Sync
   const docHeadings = useMemo(() => extractHeadings(currentDoc.content), [currentDoc.content]);
@@ -503,6 +665,7 @@ export default function App() {
 
   // Template snippet inserter
   const handleInsertTemplate = (snippet: string) => {
+    handleRecordHistory(currentDoc.content);
     handleUpdateContent(currentDoc.content + snippet);
   };
 
@@ -554,6 +717,11 @@ export default function App() {
                 scrollRef={editorScrollRef}
                 onScrollSync={handleEditorScrollSync}
                 onScrollDirectionChange={(v) => setIsNavVisible(v)}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={handleUndo}
+                onRedo={handleRedo}
+                onRecordHistory={handleRecordHistory}
               />
             </div>
             <div 
@@ -602,6 +770,11 @@ export default function App() {
               settings={settings}
               playTypewriterSound={playTypewriterSound}
               onScrollDirectionChange={(v) => setIsNavVisible(v)}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onRecordHistory={handleRecordHistory}
             />
           </div>
         )}
@@ -704,6 +877,7 @@ export default function App() {
         onOpenHistory={() => setIsHistoryOpen(true)}
         onOpenAmbient={() => setIsAmbientOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        onOpenChangelog={() => setIsChangelogOpen(true)}
         onInsertTemplate={handleInsertTemplate}
         settings={settings}
         onUpdateSettings={handleUpdateSettings}
@@ -718,6 +892,14 @@ export default function App() {
         currentDoc={currentDoc}
         onRestoreContent={handleUpdateContent}
         theme={theme}
+      />
+
+      {/* First-Time Version Changelog Modal */}
+      <ChangelogModal
+        isOpen={isChangelogOpen}
+        onClose={() => setIsChangelogOpen(false)}
+        theme={theme}
+        version={CURRENT_APP_VERSION}
       />
     </div>
   );
