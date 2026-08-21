@@ -1,0 +1,473 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif-literary: 'Newsreader', Georgia, serif;
+    --font-serif-elegant: 'Cormorant Garamond', 'Times New Roman', serif;
+    --font-serif-classic: 'Lora', Georgia, serif;
+    --font-serif-display: 'Instrument Serif', Georgia, serif;
+    --font-sans-clean: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-sans-legible: 'Atkinson Hyperlegible', system-ui, sans-serif;
+    --font-mono-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+/* Custom scrollbars for clean aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, 0.45);
+}
+
+/* ============================================================
+   SELECTION STYLES (Ultra-clear contrast on Light & Dark themes)
+   ============================================================ */
+
+::selection {
+  background-color: rgba(245, 158, 11, 0.3);
+  color: inherit;
+}
+
+/* Light / Warm themes: Selected text must NEVER turn white or fade */
+.theme-light ::selection,
+[data-theme-category="light"] ::selection,
+[data-theme-category="warm"] ::selection {
+  background-color: #fde68a !important; /* Soft honey highlighter */
+  color: #1c1917 !important; /* Deep dark charcoal for high legibility */
+}
+
+/* Dark themes */
+.theme-dark ::selection,
+[data-theme-category="dark"] ::selection {
+  background-color: rgba(245, 158, 11, 0.45) !important;
+  color: #ffffff !important;
+}
+
+/* ============================================================
+   MARKDOWN TYPOGRAPHY STYLESHEET (Ultra-comfortable reading)
+   ============================================================ */
+
+.markdown-body {
+  color: inherit;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  text-wrap: pretty;
+}
+
+/* Paragraphs with open leading and comfortable breathing room */
+.markdown-body p {
+  margin-top: 1.15em;
+  margin-bottom: 1.15em;
+  line-height: inherit;
+  overflow-wrap: break-word;
+}
+
+/* Headings with clear typographic scale, generous top margins, and section chunking */
+.markdown-body h1 {
+  font-size: 2.3em;
+  line-height: 1.22;
+  font-weight: 700;
+  margin-top: 2.4em;
+  margin-bottom: 0.8em;
+  letter-spacing: -0.025em;
+  border-bottom: 1.5px solid var(--border-color, rgba(150, 150, 150, 0.25));
+  padding-bottom: 0.4em;
+}
+
+.markdown-body h2 {
+  font-size: 1.7em;
+  line-height: 1.28;
+  font-weight: 700;
+  margin-top: 2.1em;
+  margin-bottom: 0.65em;
+  letter-spacing: -0.02em;
+}
+
+.markdown-body h3 {
+  font-size: 1.35em;
+  line-height: 1.35;
+  font-weight: 600;
+  margin-top: 1.8em;
+  margin-bottom: 0.55em;
+  letter-spacing: -0.015em;
+}
+
+.markdown-body h4 {
+  font-size: 1.15em;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.45em;
+}
+
+.markdown-body h5 {
+  font-size: 0.95em;
+  font-weight: 600;
+  margin-top: 1.3em;
+  margin-bottom: 0.35em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.markdown-body h6 {
+  font-size: 0.85em;
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.3em;
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* First heading in document gets tighter top margin */
+.markdown-body > h1:first-child,
+.markdown-body > h2:first-child,
+.markdown-body > h3:first-child {
+  margin-top: 0.2em;
+}
+
+/* Lists */
+.markdown-body ul {
+  list-style-type: disc;
+  padding-left: 1.6em;
+  margin-top: 0.85em;
+  margin-bottom: 1.25em;
+}
+
+.markdown-body ol {
+  list-style-type: decimal;
+  padding-left: 1.6em;
+  margin-top: 0.85em;
+  margin-bottom: 1.25em;
+}
+
+.markdown-body li {
+  margin-top: 0.4em;
+  margin-bottom: 0.4em;
+  line-height: inherit;
+}
+
+.markdown-body li > p {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+/* Blockquotes */
+.markdown-body blockquote.editorial-blockquote {
+  border-left: 3.5px solid var(--blockquote-border, #d97706);
+  padding-left: 1.35em;
+  padding-top: 0.15em;
+  padding-bottom: 0.15em;
+  margin-left: 0;
+  margin-right: 0;
+  margin-top: 1.75em;
+  margin-bottom: 1.75em;
+  font-style: italic;
+  opacity: 0.96;
+  line-height: inherit;
+}
+
+/* Inline Code */
+.markdown-body code.inline-code {
+  background-color: var(--code-bg, rgba(150, 150, 150, 0.15));
+  padding: 0.18em 0.45em;
+  border-radius: 4px;
+  font-family: var(--font-mono-code);
+  font-size: 0.88em;
+  border: 1px solid var(--border-color, rgba(150, 150, 150, 0.2));
+}
+
+/* Links */
+.markdown-body a.prose-link {
+  color: var(--accent-color, #d97706);
+  text-decoration: underline;
+  text-underline-offset: 3.5px;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.markdown-body a.prose-link:hover {
+  opacity: 0.8;
+}
+
+/* Markdown ==highlight== and <mark> tag */
+.markdown-body mark,
+.markdown-body .mark-highlight {
+  background-color: #fef08a !important; /* Always readable warm yellow highlighter */
+  color: #1c1917 !important; /* Dark charcoal text */
+  padding: 0.12em 0.35em;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.theme-dark .markdown-body mark,
+.theme-dark .markdown-body .mark-highlight,
+[data-theme-category="dark"] .markdown-body mark,
+[data-theme-category="dark"] .markdown-body .mark-highlight {
+  background-color: rgba(245, 158, 11, 0.35) !important;
+  color: #fef3c7 !important;
+}
+
+/* Tables */
+.markdown-body .table-container {
+  margin: 2em 0;
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgba(150, 150, 150, 0.25));
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.markdown-body th {
+  background-color: var(--table-header-bg, rgba(150, 150, 150, 0.12));
+  border: 1px solid var(--border-color, rgba(150, 150, 150, 0.2));
+  padding: 0.75em 1em;
+  font-weight: 700;
+  text-align: left;
+}
+
+.markdown-body td {
+  border: 1px solid var(--border-color, rgba(150, 150, 150, 0.2));
+  padding: 0.65em 1em;
+}
+
+.markdown-body tbody tr:nth-child(even) {
+  background-color: var(--table-stripe-bg, rgba(150, 150, 150, 0.04));
+}
+
+/* ============================================================
+   CALLOUT ADMONITIONS (High-contrast, readable in Light & Dark)
+   ============================================================ */
+
+.admonition {
+  margin: 1.75em 0;
+  padding: 1.1rem 1.35rem;
+  border-radius: 0 8px 8px 0;
+  border-left-width: 4px;
+  border-left-style: solid;
+}
+
+.admonition .admonition-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 0.88rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.45rem;
+}
+
+.admonition .admonition-content {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.admonition .admonition-content p {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+/* Note (Blue) */
+.admonition-note {
+  border-left-color: #2563eb;
+  background-color: rgba(37, 99, 235, 0.1);
+  color: #1e3a8a;
+}
+:root[data-theme-category="dark"] .admonition-note,
+.theme-dark .admonition-note {
+  background-color: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+}
+
+/* Info (Sky/Cyan) */
+.admonition-info {
+  border-left-color: #0284c7;
+  background-color: rgba(2, 132, 199, 0.1);
+  color: #0c4a6e;
+}
+:root[data-theme-category="dark"] .admonition-info,
+.theme-dark .admonition-info {
+  background-color: rgba(2, 132, 199, 0.18);
+  color: #bae6fd;
+}
+
+/* Tip (Emerald/Green) */
+.admonition-tip {
+  border-left-color: #059669;
+  background-color: rgba(5, 150, 105, 0.1);
+  color: #064e3b;
+}
+:root[data-theme-category="dark"] .admonition-tip,
+.theme-dark .admonition-tip {
+  background-color: rgba(5, 150, 105, 0.18);
+  color: #a7f3d0;
+}
+
+/* Warning (Amber/Orange) */
+.admonition-warning {
+  border-left-color: #d97706;
+  background-color: rgba(217, 119, 6, 0.13);
+  color: #78350f;
+}
+:root[data-theme-category="dark"] .admonition-warning,
+.theme-dark .admonition-warning {
+  background-color: rgba(217, 119, 6, 0.2);
+  color: #fde68a;
+}
+
+/* Important (Purple) */
+.admonition-important {
+  border-left-color: #7c3aed;
+  background-color: rgba(124, 58, 237, 0.13);
+  color: #4c1d95;
+}
+:root[data-theme-category="dark"] .admonition-important,
+.theme-dark .admonition-important {
+  background-color: rgba(124, 58, 237, 0.2);
+  color: #ddd6fe;
+}
+
+/* Caution (Rose/Red) */
+.admonition-caution {
+  border-left-color: #e11d48;
+  background-color: rgba(225, 29, 72, 0.13);
+  color: #881337;
+}
+:root[data-theme-category="dark"] .admonition-caution,
+.theme-dark .admonition-caution {
+  background-color: rgba(225, 29, 72, 0.2);
+  color: #fecdd3;
+}
+
+/* Quote */
+.admonition-quote {
+  border-left-color: #78716c;
+  background-color: rgba(120, 113, 108, 0.1);
+  color: inherit;
+  font-style: italic;
+}
+
+/* Drop Cap Styling */
+.drop-cap > p:first-of-type::first-letter {
+  font-family: var(--font-serif-display), var(--font-serif-literary), serif;
+  float: left;
+  font-size: 3.8em;
+  line-height: 0.8;
+  padding-top: 4px;
+  padding-right: 12px;
+  padding-bottom: 2px;
+  font-weight: 600;
+}
+
+/* Book Paragraph Indentation */
+.book-indent > p + p {
+  text-indent: 1.8em;
+  margin-top: 0 !important;
+}
+
+/* KaTeX formatting overrides */
+.katex-display {
+  margin: 1.5em 0 !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}
+
+/* Smooth Focus fade for typewriter mode */
+.focus-dim-inactive p:not(:hover),
+.focus-dim-inactive li:not(:hover),
+.focus-dim-inactive h1:not(:hover),
+.focus-dim-inactive h2:not(:hover),
+.focus-dim-inactive h3:not(:hover),
+.focus-dim-inactive blockquote:not(:hover),
+.focus-dim-inactive .admonition:not(:hover) {
+  opacity: 0.3;
+  transition: opacity 0.25s ease-in-out;
+}
+
+/* Presentation Slide Content Scaling */
+.presentation-slide-content h1 {
+  font-size: 2.2em !important;
+  margin-top: 0.2em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.presentation-slide-content h2 {
+  font-size: 1.7em !important;
+  margin-top: 0.5em !important;
+  margin-bottom: 0.4em !important;
+}
+
+.presentation-slide-content h3 {
+  font-size: 1.35em !important;
+  margin-top: 0.4em !important;
+  margin-bottom: 0.3em !important;
+}
+
+.presentation-slide-content p,
+.presentation-slide-content li {
+  font-size: 1.1em;
+  line-height: 1.65;
+}
+
+/* Print Stylesheet for flawless PDF & paper printing */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .preview-container {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: white !important;
+    color: #111 !important;
+  }
+  .markdown-body {
+    font-size: 11pt !important;
+    line-height: 1.6 !important;
+  }
+  .markdown-body pre, 
+  .markdown-body blockquote,
+  .markdown-body table {
+    page-break-inside: avoid;
+  }
+  .markdown-body h1, 
+  .markdown-body h2, 
+  .markdown-body h3 {
+    page-break-after: avoid;
+  }
+}

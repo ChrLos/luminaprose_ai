@@ -1,0 +1,6 @@
+{
+  "name": "Lumina Prose - Markdown Viewer Website",
+  "description": "An exquisite, distraction-free Markdown editor and editorial reader with curated typography, atmospheric themes, and focus modes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
