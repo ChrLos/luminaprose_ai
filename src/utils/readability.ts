@@ -1,5 +1,104 @@
 import { ReadabilityMetrics } from '../types';
 
+/**
+ * Accurately counts sentences in Markdown prose using structural & markdown-aware detection.
+ * Handles headings, bullet/numbered lists, task lists, table rows, blockquotes, and multi-line paragraphs.
+ */
+export function countMarkdownSentences(markdown: string): number {
+  if (!markdown || !markdown.trim()) return 0;
+
+  // 1. Strip fenced code blocks, display math, and HTML comments
+  const textWithoutBlocks = markdown
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\$\$[\s\S]*?\$\$/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  const lines = textWithoutBlocks.split('\n');
+  const structuralBlocks: string[] = [];
+  let currentParagraphLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (currentParagraphLines.length > 0) {
+      const combined = currentParagraphLines.join(' ').trim();
+      if (combined) {
+        structuralBlocks.push(combined);
+      }
+      currentParagraphLines = [];
+    }
+  };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      flushParagraph();
+      continue;
+    }
+
+    // Check if line is a structural markdown element
+    const isHeading = /^#{1,6}\s+/.test(trimmed);
+    const isListItem = /^([-*+]|\d+[.)])\s+/.test(trimmed);
+    const isBlockquote = /^>\s*/.test(trimmed);
+    const isTableRow = /^\|.*\|$/.test(trimmed);
+    const isHorizontalRule = /^([-*_]\s*){3,}$/.test(trimmed);
+
+    if (isHorizontalRule) {
+      flushParagraph();
+      continue;
+    }
+
+    if (isHeading || isListItem || isBlockquote || isTableRow) {
+      flushParagraph();
+      // Clean the structural prefix
+      const cleaned = trimmed
+        .replace(/^#{1,6}\s+/, '')
+        .replace(/^([-*+]|\d+[.)])\s+(\[[ xX]\]\s*)?/, '')
+        .replace(/^>\s*/, '')
+        .replace(/^\||\|$/g, '')
+        .replace(/\|/g, ', ');
+      
+      if (cleaned.trim()) {
+        structuralBlocks.push(cleaned.trim());
+      }
+    } else {
+      // Regular paragraph line - accumulate for soft-wrap handling
+      currentParagraphLines.push(trimmed);
+    }
+  }
+
+  flushParagraph();
+
+  let totalSentences = 0;
+
+  for (const block of structuralBlocks) {
+    // Strip inline markdown artifacts: images, links, formatting, math, inline code
+    const cleanBlock = block
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/`[^`]+`/g, '')
+      .replace(/\$[^\$]+?\$/g, '')
+      .replace(/[*_~`]/g, '')
+      .trim();
+
+    if (!cleanBlock) continue;
+
+    // Check if block contains any actual letters/numbers
+    const hasWords = /[a-zA-Z0-9_\u00C0-\u017F]/.test(cleanBlock);
+    if (!hasWords) continue;
+
+    // Split by sentence terminators: . ! ? … and CJK punctuation 。！？
+    const segments = cleanBlock
+      .split(/[.!?…\u3002\uFF01\uFF1F]+(?:\s+|$|["'”’»])/g)
+      .map((s) => s.trim())
+      .filter((s) => /[a-zA-Z0-9_\u00C0-\u017F]/.test(s));
+
+    // Each non-empty structural unit counts as at least 1 sentence
+    const blockSentences = Math.max(1, segments.length);
+    totalSentences += blockSentences;
+  }
+
+  return Math.max(1, totalSentences);
+}
+
 export function calculateReadability(markdown: string): ReadabilityMetrics {
   if (!markdown || !markdown.trim()) {
     return {
@@ -46,8 +145,8 @@ export function calculateReadability(markdown: string): ReadabilityMetrics {
   // Speaking time (approx 130 words per minute)
   const speakingTimeMinutes = Math.max(1, Math.ceil(words / 130));
 
-  // Flesch-Kincaid & Syllables Estimation
-  const sentences = (cleanText.match(/[.!?]+(?:\s+|$)/g) || []).length || 1;
+  // Markdown-aware structural sentence counting (Option 2)
+  const sentences = countMarkdownSentences(markdown);
   
   let totalSyllables = 0;
   for (const word of wordsArray) {
@@ -94,3 +193,4 @@ function countSyllables(word: string): number {
   const syl = word.match(/[aeiouy]{1,2}/g);
   return syl ? Math.max(1, syl.length) : 1;
 }
+

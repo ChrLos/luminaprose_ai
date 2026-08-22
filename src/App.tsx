@@ -24,7 +24,7 @@ import { MobileBottomNav } from './components/MobileBottomNav';
 import { ChangelogModal } from './components/ChangelogModal';
 import { ambientAudio } from './utils/ambientAudio';
 
-const CURRENT_APP_VERSION = 'v1.1.0';
+const CURRENT_APP_VERSION = 'v1.1.1';
 
 const STORAGE_KEYS = {
   DOCS: 'lumina_markdown_documents_v1',
@@ -33,7 +33,7 @@ const STORAGE_KEYS = {
   THEME: 'lumina_markdown_theme_v1',
   VIEW: 'lumina_markdown_view_v1',
   KEY_SOUND: 'lumina_markdown_key_sound_v1',
-  CHANGELOG_SEEN_VERSION: 'lumina_markdown_changelog_seen_v1_1_0',
+  CHANGELOG_SEEN_VERSION: 'lumina_markdown_changelog_seen_v1_1_1',
 };
 
 const DEFAULT_SETTINGS: TypographySettings = {

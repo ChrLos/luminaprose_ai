@@ -14,7 +14,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
   isOpen,
   onClose,
   theme,
-  version = 'v1.1.0',
+  version = 'v1.1.1',
 }) => {
   const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
 
@@ -143,6 +143,10 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
           feature: 'Storage recovery.',
           desc: 'The app detects corrupted local storage on startup and resets safely to sample notes instead of crashing on a blank screen.',
         },
+        {
+          feature: 'Markdown-aware readability analysis.',
+          desc: 'Readability scores no longer need periods on lists, tasks, headings, or table rows.',
+        },
       ],
     },
   ];
@@ -177,7 +181,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-bold text-lg tracking-tight">What&apos;s New in MarkFlow</h2>
+                <h2 className="font-bold text-lg tracking-tight">What&apos;s New in Lumina Prose</h2>
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold tracking-wide bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                   {version}
                 </span>

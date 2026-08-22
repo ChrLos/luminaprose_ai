@@ -153,7 +153,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   <!-- Web Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,600&display=swap" rel="stylesheet">
   
   <!-- KaTeX Math Stylesheet -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -439,79 +439,85 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       overflow-wrap: break-word;
     }
 
-    /* Responsive Headings */
+    /* Links */
+    .markdown-body a {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 3.5px;
+      font-weight: 500;
+    }
+
+    .markdown-body a:hover {
+      opacity: 0.8;
+    }
+
+    /* Headings */
     .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
-      font-family: var(--font-header);
+      font-family: inherit;
+      color: inherit;
     }
 
     .markdown-body h1 {
-      font-size: 1.85em;
-      line-height: 1.25;
+      font-size: 2.3em;
+      line-height: 1.22;
       font-weight: 700;
-      margin-top: 2em;
-      margin-bottom: 0.7em;
+      margin-top: 2.4em;
+      margin-bottom: 0.8em;
       letter-spacing: -0.025em;
       border-bottom: 1.5px solid var(--border-color);
-      padding-bottom: 0.35em;
+      padding-bottom: 0.4em;
       scroll-margin-top: 4.5rem;
       overflow-wrap: break-word;
     }
 
-    @media (min-width: 640px) {
-      .markdown-body h1 {
-        font-size: 2.3em;
-        line-height: 1.22;
-        margin-top: 2.4em;
-        margin-bottom: 0.8em;
-      }
-    }
-
     .markdown-body h2 {
-      font-size: 1.45em;
-      line-height: 1.3;
+      font-size: 1.7em;
+      line-height: 1.28;
       font-weight: 700;
-      margin-top: 1.8em;
-      margin-bottom: 0.55em;
+      margin-top: 2.1em;
+      margin-bottom: 0.65em;
       letter-spacing: -0.02em;
       scroll-margin-top: 4.5rem;
       overflow-wrap: break-word;
     }
 
-    @media (min-width: 640px) {
-      .markdown-body h2 {
-        font-size: 1.7em;
-        line-height: 1.28;
-        margin-top: 2.1em;
-        margin-bottom: 0.65em;
-      }
-    }
-
     .markdown-body h3 {
-      font-size: 1.2em;
+      font-size: 1.35em;
       line-height: 1.35;
       font-weight: 600;
-      margin-top: 1.6em;
-      margin-bottom: 0.5em;
+      margin-top: 1.8em;
+      margin-bottom: 0.55em;
       letter-spacing: -0.015em;
       scroll-margin-top: 4.5rem;
       overflow-wrap: break-word;
     }
 
-    @media (min-width: 640px) {
-      .markdown-body h3 {
-        font-size: 1.35em;
-        margin-top: 1.8em;
-        margin-bottom: 0.55em;
-      }
-    }
-
     .markdown-body h4 {
-      font-size: 1.08em;
+      font-size: 1.15em;
       line-height: 1.4;
       font-weight: 600;
-      margin-top: 1.35em;
-      margin-bottom: 0.4em;
+      margin-top: 1.5em;
+      margin-bottom: 0.45em;
       scroll-margin-top: 4.5rem;
+    }
+
+    .markdown-body h5 {
+      font-size: 0.95em;
+      font-weight: 600;
+      margin-top: 1.3em;
+      margin-bottom: 0.35em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .markdown-body h6 {
+      font-size: 0.85em;
+      font-weight: 600;
+      margin-top: 1.2em;
+      margin-bottom: 0.3em;
+      opacity: 0.8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .markdown-body > h1:first-child,

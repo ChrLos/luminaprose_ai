@@ -299,8 +299,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       },
       {
         id: 'act-changelog',
-        title: "What's New in MarkFlow (Release Notes)",
-        subtitle: 'View features, enhancements, and performance updates in v2.5.0',
+        title: "What's New in Lumina Prose (Release Notes)",
+        subtitle: 'View features, enhancements, and performance updates in v1.1.0',
         category: 'Actions' as const,
         icon: <Sparkles className="w-4 h-4 text-amber-500" />,
         perform: () => {

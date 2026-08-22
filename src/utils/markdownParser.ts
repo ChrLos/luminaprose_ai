@@ -79,16 +79,7 @@ sharedRenderer.heading = function ({
 
   const uniqueId = count === 0 ? baseId : `${baseId}-${count}`;
 
-  return `
-    <h${depth} id="${uniqueId}" class="group heading-anchor-wrapper flex items-center justify-between">
-      <span>${text}</span>
-      <a 
-        href="#${uniqueId}" 
-        class="heading-anchor opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity ml-2 text-stone-400 dark:text-stone-500 hover:text-amber-600 no-underline cursor-pointer"
-        aria-label="Permalink to ${plainText}"
-      >#</a>
-    </h${depth}>
-  `;
+  return `<h${depth} id="${uniqueId}">${text}</h${depth}>`;
 };
 
 // Obsidian-style Callouts / Admonitions
