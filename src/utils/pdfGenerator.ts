@@ -87,7 +87,7 @@ export async function generateDirectPdf({
 
       /* Headings */
       h1 {
-        font-family: ${headerFontFamily};
+        font-family: inherit;
         font-size: 2.15em;
         font-weight: 700;
         margin-top: 1.8em;
@@ -101,7 +101,7 @@ export async function generateDirectPdf({
         break-after: avoid;
       }
       h2 {
-        font-family: ${headerFontFamily};
+        font-family: inherit;
         font-size: 1.55em;
         font-weight: 700;
         margin-top: 1.6em;
@@ -113,7 +113,7 @@ export async function generateDirectPdf({
         break-after: avoid;
       }
       h3 {
-        font-family: ${headerFontFamily};
+        font-family: inherit;
         font-size: 1.25em;
         font-weight: 600;
         margin-top: 1.4em;
@@ -124,7 +124,7 @@ export async function generateDirectPdf({
         break-after: avoid;
       }
       h4, h5, h6 {
-        font-family: ${headerFontFamily};
+        font-family: inherit;
         font-weight: 600;
         margin-top: 1.2em;
         margin-bottom: 0.35em;

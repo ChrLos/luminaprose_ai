@@ -41,6 +41,7 @@ export function extractHeadings(markdown: string): TocHeading[] {
 
       // Clean raw text to match sharedRenderer's plain text slug
       const cleanedText = rawText
+        .replace(/<[^>]*>/g, '')
         .replace(/\$\$[\s\S]*?\$\$/g, '')
         .replace(/\$[^\$]+?\$/g, '')
         .replace(/`[^`]+`/g, '')
@@ -63,32 +64,35 @@ export function extractHeadings(markdown: string): TocHeading[] {
 // Setup custom marked renderer with placeholder-based KaTeX protection
 const sharedRenderer = new marked.Renderer();
 
-// Headings with unique IDs and smooth anchor links
-sharedRenderer.heading = function ({
-  tokens,
-  depth,
-}: {
-  tokens: any[];
-  depth: number;
-}): string {
-  const text = this.parser.parseInline(tokens);
+// Headings with unique IDs, line numbers, and smooth anchor links
+sharedRenderer.heading = function (token: any): string {
+  const text = this.parser.parseInline(token.tokens || []);
   const plainText = text.replace(/<[^>]*>/g, '');
   const baseId = slugify(plainText);
   const count = currentParseHeadingCounts.get(baseId) || 0;
   currentParseHeadingCounts.set(baseId, count + 1);
 
   const uniqueId = count === 0 ? baseId : `${baseId}-${count}`;
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
 
-  return `<h${depth} id="${uniqueId}">${text}</h${depth}>`;
+  return `<h${token.depth}${lineAttr} id="${uniqueId}">${text}</h${token.depth}>`;
 };
 
-// Obsidian-style Callouts / Admonitions
-sharedRenderer.blockquote = function ({ tokens }: { tokens: any[] }): string {
-  const body = this.parser.parse(tokens);
+// Paragraphs with data-line tracking
+sharedRenderer.paragraph = function (token: any): string {
+  const text = this.parser.parseInline(token.tokens || []);
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+  return `<p${lineAttr}>${text}</p>`;
+};
+
+// Obsidian-style Callouts / Admonitions with data-line
+sharedRenderer.blockquote = function (token: any): string {
+  const body = this.parser.parse(token.tokens || []);
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
 
   // Match Obsidian callouts: > [!NOTE] or > [!WARNING] or > [!TIP] etc.
   const calloutMatch = body.match(
-    /<p>\s*\[!([a-zA-Z]+)\]([+-]?)(?:[ \t]+([^\n<]+))?\s*(?:<br\s*\/?>)?([\s\S]*?)<\/p>([\s\S]*)/
+    /<p[^>]*>\s*\[!([a-zA-Z]+)\]([+-]?)(?:[ \t]+([^\n<]+))?\s*(?:<br\s*\/?>)?([\s\S]*?)<\/p>([\s\S]*)/
   );
 
   if (calloutMatch) {
@@ -146,7 +150,7 @@ sharedRenderer.blockquote = function ({ tokens }: { tokens: any[] }): string {
       'border-amber-500/80 bg-amber-500/5 text-amber-900 dark:text-amber-200';
 
     return `
-      <div class="admonition-block admonition-${type} my-5 p-4 rounded-xl border-l-4 ${colorClasses} shadow-2xs">
+      <div ${lineAttr} class="admonition-block admonition-${type} my-5 p-4 rounded-xl border-l-4 ${colorClasses} shadow-2xs">
         <div class="admonition-title flex items-center gap-2 font-semibold text-sm mb-2 select-none">
           <span class="admonition-icon">${icon}</span>
           <span>${title}</span>
@@ -159,10 +163,15 @@ sharedRenderer.blockquote = function ({ tokens }: { tokens: any[] }): string {
     `;
   }
 
-  return `<blockquote class="editorial-blockquote">${body}</blockquote>`;
+  return `<blockquote ${lineAttr} class="editorial-blockquote">${body}</blockquote>`;
 };
 
-function renderCodeBlock(text: string, lang?: string, isDark = false): string {
+sharedRenderer.code = function (token: any): string {
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+  return renderCodeBlock(token.text || '', token.lang || '', false, lineAttr);
+};
+
+function renderCodeBlock(text: string, lang?: string, isDark = false, lineAttr = ''): string {
   const normalizedLang = (lang || '').trim().toLowerCase();
 
   // Mermaid diagrams rendering
@@ -174,7 +183,7 @@ function renderCodeBlock(text: string, lang?: string, isDark = false): string {
     const initialContent = cachedSvg || '<div class="text-xs opacity-60 font-mono py-4">Rendering diagram...</div>';
 
     return `
-      <div class="mermaid-block-wrapper my-6 p-4 rounded-xl border shadow-xs transition-colors flex flex-col w-full relative overflow-x-auto" style="background-color: var(--code-bg); border-color: var(--border-color);">
+      <div ${lineAttr} class="mermaid-block-wrapper my-6 p-4 rounded-xl border shadow-xs transition-colors flex flex-col w-full relative overflow-x-auto" style="background-color: var(--code-bg); border-color: var(--border-color);">
         <div class="code-header w-full flex items-center justify-between pb-2 mb-2 border-b text-[11px] font-mono select-none" style="border-color: var(--border-color);">
           <span class="uppercase font-semibold tracking-wider flex items-center gap-1.5 opacity-75">
             <span>📊</span>
@@ -232,7 +241,7 @@ function renderCodeBlock(text: string, lang?: string, isDark = false): string {
   const encodedRaw = encodeURIComponent(text);
 
   return `
-    <div class="code-block-wrapper relative group my-6 rounded-lg overflow-hidden border shadow-xs">
+    <div ${lineAttr} class="code-block-wrapper relative group my-6 rounded-lg overflow-hidden border shadow-xs">
       <div class="code-header flex items-center justify-between px-3 py-1.5 border-b text-xs font-mono select-none">
         <span class="code-language uppercase font-semibold tracking-wider text-[11px]">${language || 'text'}</span>
         <button 
@@ -274,8 +283,10 @@ sharedRenderer.table = function (token: any): string {
     })
     .join('');
 
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+
   return `
-    <div class="table-container">
+    <div ${lineAttr} class="table-container">
       <table>
         <thead><tr>${headerHtml}</tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -296,45 +307,65 @@ sharedRenderer.checkbox = function (): string {
   return '';
 };
 
-// Interactive Task List items with indexed tracking
-sharedRenderer.listitem = function ({
-  tokens,
-  task,
-  checked,
-}: {
-  tokens: any[];
-  task: boolean;
-  checked?: boolean;
-}): string {
-  const text = this.parser.parse(tokens);
-  if (task) {
-    const isChecked = Boolean(checked);
+// Custom List container renderer supporting clean task-list and standard lists
+sharedRenderer.list = function (token: any): string {
+  const ordered = token.ordered;
+  const start = token.start;
+  let body = '';
+  for (let i = 0; i < token.items.length; i++) {
+    body += (this as any).listitem(token.items[i]);
+  }
+  const isTaskList = body.includes('task-list-item');
+  const tag = ordered ? 'ol' : 'ul';
+  const startAttr = ordered && start && start !== 1 ? ` start="${start}"` : '';
+  const classList = isTaskList
+    ? 'task-list list-none p-0 my-3 space-y-1.5'
+    : (ordered ? 'my-3 pl-6 list-decimal space-y-1' : 'my-3 pl-6 list-disc space-y-1');
+  
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+
+  return `<${tag}${startAttr}${lineAttr} class="${classList}">${body}</${tag}>`;
+};
+
+// Interactive Task List items with indexed tracking and clean loose list paragraph handling
+sharedRenderer.listitem = function (token: any): string {
+  const text = this.parser.parse(token.tokens || []);
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+  if (token.task) {
+    const isChecked = Boolean(token.checked);
     const taskIndex = currentParseTaskIndex++;
     // Clean out any leftover internal checkbox tags or literal markers
-    const cleanedText = text
+    let cleanedText = text
       .replace(/<input\s+[^>]*type=["']?checkbox["']?[^>]*>/gi, '')
       .replace(/^\s*\[[ xX]\]\s*/, '')
       .trim();
 
+    // In loose lists (lists with blank lines), marked wraps item text in <p>...</p>.
+    // Strip outer <p>...</p> tags if single paragraph so task text aligns cleanly with the checkbox.
+    if (cleanedText.startsWith('<p>') && cleanedText.endsWith('</p>') && cleanedText.indexOf('<p>', 3) === -1) {
+      cleanedText = cleanedText.slice(3, -4).trim();
+    }
+
     return `
-      <li class="task-list-item flex items-start gap-2.5 my-1.5 list-none">
+      <li ${lineAttr} class="task-list-item flex items-start gap-2.5 my-1.5 list-none">
         <input 
           type="checkbox" 
           ${isChecked ? 'checked' : ''} 
           data-task-index="${taskIndex}"
-          class="task-checkbox mt-1 w-4 h-4 rounded cursor-pointer accent-amber-600 focus:ring-amber-500"
+          class="task-checkbox mt-1 w-4 h-4 rounded cursor-pointer accent-amber-600 focus:ring-amber-500 shrink-0"
           onchange="window.__toggleTaskItem?.(this)"
         />
-        <div class="task-content flex-1 ${isChecked ? 'line-through opacity-60' : ''}">${cleanedText}</div>
+        <div class="task-content flex-1 min-w-0 leading-relaxed ${isChecked ? 'line-through opacity-60' : ''}">${cleanedText}</div>
       </li>
     `;
   }
-  return `<li>${text}</li>`;
+  return `<li ${lineAttr}>${text}</li>`;
 };
 
 // Horizontal Rule / Divider (Explicitly rendered & styled)
-sharedRenderer.hr = function (): string {
-  return `<hr class="my-8 border-t" />`;
+sharedRenderer.hr = function (token: any): string {
+  const lineAttr = token.lineIndex !== undefined ? ` data-line="${token.lineIndex}"` : '';
+  return `<hr ${lineAttr} class="my-8 border-t" />`;
 };
 
 // Smart Footnotes processing
@@ -345,7 +376,7 @@ function processFootnotes(text: string): { processedText: string; footnotesHtml:
   // Extract definitions: [^1]: Definition text
   const cleanedText = text.replace(/^\[\^([^\]]+)\]:\s*(.+)$/gm, (_, id, def) => {
     footnoteDefs.set(id, def.trim());
-    return '';
+    return '\n';
   });
 
   if (footnoteDefs.size === 0) {
@@ -399,12 +430,72 @@ marked.setOptions({
   renderer: sharedRenderer,
 });
 
+// KaTeX formula render cache to prevent re-rendering unchanged math expressions during editing
+const katexCache = new Map<string, string>();
+const MAX_KATEX_CACHE_SIZE = 500;
+
+function getCachedKatex(math: string, displayMode: boolean): string {
+  const cacheKey = `${displayMode ? 'D' : 'I'}::${math}`;
+  if (katexCache.has(cacheKey)) {
+    return katexCache.get(cacheKey)!;
+  }
+  const rendered = katex.renderToString(math, {
+    displayMode,
+    throwOnError: false,
+  });
+  if (katexCache.size >= MAX_KATEX_CACHE_SIZE) {
+    const firstKey = katexCache.keys().next().value;
+    if (firstKey) katexCache.delete(firstKey);
+  }
+  katexCache.set(cacheKey, rendered);
+  return rendered;
+}
+
 // Fast LRU Cache for parsed Markdown
 const parseCache = new Map<string, string>();
 const MAX_CACHE_SIZE = 40;
 
 export function clearParseCache() {
   parseCache.clear();
+  katexCache.clear();
+}
+
+// Fast token line index assignment for block elements
+function attachLineNumbersToTokens(tokens: any[], fullMarkdown: string) {
+  let searchPos = 0;
+
+  for (const token of tokens) {
+    if (!token.raw) continue;
+
+    const foundPos = fullMarkdown.indexOf(token.raw, searchPos);
+    if (foundPos !== -1) {
+      const sliceBefore = fullMarkdown.slice(0, foundPos);
+      const lineIndex = (sliceBefore.match(/\n/g) || []).length;
+      token.lineIndex = lineIndex;
+      searchPos = foundPos + token.raw.length;
+
+      // Process list items if this is a list token
+      if (token.type === 'list' && Array.isArray(token.items)) {
+        let itemSearchPos = foundPos;
+        for (const item of token.items) {
+          if (item.raw) {
+            const itemPos = fullMarkdown.indexOf(item.raw, itemSearchPos);
+            if (itemPos !== -1) {
+              const itemSliceBefore = fullMarkdown.slice(0, itemPos);
+              item.lineIndex = (itemSliceBefore.match(/\n/g) || []).length;
+              itemSearchPos = itemPos + item.raw.length;
+            } else {
+              item.lineIndex = lineIndex;
+            }
+          }
+        }
+      }
+    } else {
+      // If token.raw wasn't found at searchPos, estimate lineIndex from current searchPos without rewinding!
+      const sliceBefore = fullMarkdown.slice(0, searchPos);
+      token.lineIndex = (sliceBefore.match(/\n/g) || []).length;
+    }
+  }
 }
 
 // Setup custom marked renderer with placeholder-based KaTeX protection
@@ -424,42 +515,48 @@ export function parseMarkdownToHtml(
   currentParseHeadingCounts = new Map<string, number>();
   currentParseTaskIndex = 0;
 
-  // 1. Protect code blocks and inline code from math parsing
+  // 1. Protect code blocks and inline code from math parsing with line index tagging
   const codeBlockPlaceholders: { id: string; html: string }[] = [];
-  let textWithCodeProtected = markdown.replace(/(```(\w*)\n?([\s\S]*?)```|`([^`\n]+)`)/g, (_match, _blockMatch, lang, blockContent, inlineContent) => {
-    const id = `%%CODE_BLOCK_${codeBlockPlaceholders.length}%%`;
-    let html = '';
+  let textWithCodeProtected = markdown.replace(
+    /(```(\w*)\n?([\s\S]*?)```|`([^`\n]+)`)/g,
+    (_match, _blockMatch, lang, blockContent, inlineContent, offset) => {
+      const id = `%%CODE_BLOCK_${codeBlockPlaceholders.length}%%`;
+      let html = '';
 
-    if (inlineContent !== undefined) {
-      const escaped = inlineContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      html = `<code class="bg-stone-500/10 dark:bg-stone-400/15 px-1.5 py-0.5 rounded text-sm font-mono">${escaped}</code>`;
-    } else {
-      html = renderCodeBlock(blockContent || '', lang ? lang.trim() : '', isDark);
+      if (inlineContent !== undefined) {
+        const escaped = inlineContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        html = `<code class="bg-stone-500/10 dark:bg-stone-400/15 px-1.5 py-0.5 rounded text-sm font-mono">${escaped}</code>`;
+        codeBlockPlaceholders.push({ id, html });
+        return id;
+      } else {
+        const lineIndex = (markdown.slice(0, offset).match(/\n/g) || []).length;
+        const lineAttr = ` data-line="${lineIndex}"`;
+        html = renderCodeBlock(blockContent || '', lang ? lang.trim() : '', isDark, lineAttr);
+        codeBlockPlaceholders.push({ id, html });
+        const newlineCount = (_match.match(/\n/g) || []).length;
+        return id + '\n'.repeat(newlineCount);
+      }
     }
-
-    codeBlockPlaceholders.push({ id, html });
-    return id;
-  });
+  );
 
   // 2. Extract and protect math formulas using placeholders
   const mathPlaceholders: { id: string; html: string }[] = [];
 
   // Block math $$ ... $$
-  textWithCodeProtected = textWithCodeProtected.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
+  textWithCodeProtected = textWithCodeProtected.replace(/\$\$([\s\S]*?)\$\$/g, (match, math, offset) => {
     const id = `%%MATH_BLOCK_${mathPlaceholders.length}%%`;
+    const lineIndex = (markdown.slice(0, offset).match(/\n/g) || []).length;
     try {
-      const html = katex.renderToString(math.trim(), {
-        displayMode: true,
-        throwOnError: false,
-      });
-      mathPlaceholders.push({ id, html: `<div class="katex-display-wrapper my-4">${html}</div>` });
+      const html = getCachedKatex(math.trim(), true);
+      mathPlaceholders.push({ id, html: `<div data-line="${lineIndex}" class="katex-display-wrapper my-4">${html}</div>` });
     } catch {
       mathPlaceholders.push({
         id,
-        html: `<pre class="text-red-500 font-mono text-sm my-2">Math Error: ${math}</pre>`,
+        html: `<pre data-line="${lineIndex}" class="text-red-500 font-mono text-sm my-2">Math Error: ${math}</pre>`,
       });
     }
-    return id;
+    const newlineCount = (match.match(/\n/g) || []).length;
+    return id + '\n'.repeat(newlineCount);
   });
 
   // Inline math $ ... $
@@ -483,10 +580,7 @@ export function parseMarkdownToHtml(
 
       const id = `%%MATH_INLINE_${mathPlaceholders.length}%%`;
       try {
-        const html = katex.renderToString(trimmed, {
-          displayMode: false,
-          throwOnError: false,
-        });
+        const html = getCachedKatex(trimmed, false);
 
         if (html.includes('katex-error')) {
           return fullMatch;
@@ -503,21 +597,26 @@ export function parseMarkdownToHtml(
   // 3. Footnotes extraction
   const { processedText: withFootnotes, footnotesHtml } = processFootnotes(textWithCodeProtected);
 
-  // 4. Custom inline markers (==highlight==, ^sup^, ~sub~) outside code blocks
+  // 4. Custom inline markers (==highlight==, ++underline++, ^sup^, ~sub~) outside code blocks
   let processed = withFootnotes;
   processed = processed.replace(/==([^=\n]+)==/g, '<mark class="mark-highlight">$1</mark>');
+  processed = processed.replace(/\+\+([^\+\n]+)\+\+/g, '<u class="markdown-underline">$1</u>');
   processed = processed.replace(/\^([^\^\s]+)\^/g, '<sup>$1</sup>');
   processed = processed.replace(/(?<!~)~([^~\s]+)~(?!~)/g, '<sub>$1</sub>');
 
-  // 5. Parse Markdown with marked
-  let parsedHtml = marked.parse(processed) as string;
+  // 5. Lex Markdown tokens with line number tagging
+  const tokens = marked.lexer(processed);
+  attachLineNumbersToTokens(tokens, processed);
 
-  // 6. Restore protected KaTeX math html placeholders
+  // 6. Parse tokens into HTML using custom renderer
+  let parsedHtml = marked.parser(tokens) as string;
+
+  // 7. Restore protected KaTeX math html placeholders
   mathPlaceholders.forEach(({ id, html }) => {
     parsedHtml = parsedHtml.split(id).join(html);
   });
 
-  // 7. Restore protected code blocks LAST so their contents remain 100% untransformed
+  // 8. Restore protected code blocks LAST so their contents remain 100% untransformed
   codeBlockPlaceholders.forEach(({ id, html }) => {
     if (parsedHtml.includes(`<p>${id}</p>`)) {
       parsedHtml = parsedHtml.replace(`<p>${id}</p>`, html.trim());

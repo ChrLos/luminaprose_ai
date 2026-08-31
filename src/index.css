@@ -187,6 +187,16 @@
   line-height: inherit;
 }
 
+/* Preformatted and Code Blocks - Contained localized horizontal scrolling */
+.markdown-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  margin-top: 1.25em;
+  margin-bottom: 1.25em;
+  border-radius: 8px;
+}
+
 /* Inline Code */
 .markdown-body code.inline-code {
   background-color: var(--code-bg, rgba(150, 150, 150, 0.15));
@@ -198,16 +208,36 @@
 }
 
 /* Links */
+.markdown-body a,
 .markdown-body a.prose-link {
   color: var(--accent-color, #d97706);
   text-decoration: underline;
   text-underline-offset: 3.5px;
   font-weight: 500;
   transition: opacity 0.15s;
+  cursor: pointer;
 }
 
+.markdown-body a:hover,
 .markdown-body a.prose-link:hover {
   opacity: 0.8;
+}
+
+/* Anchor Target Highlight Animation on Jump */
+@keyframes anchorFlash {
+  0% {
+    background-color: rgba(245, 158, 11, 0.35);
+    outline: 2px solid rgba(245, 158, 11, 0.7);
+    border-radius: 4px;
+  }
+  100% {
+    background-color: transparent;
+    outline: 2px solid transparent;
+  }
+}
+
+.anchor-target-highlight {
+  animation: anchorFlash 1.4s ease-out;
 }
 
 /* Markdown ==highlight== and <mark> tag */

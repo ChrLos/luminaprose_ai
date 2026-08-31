@@ -28,6 +28,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
     { key: 'Ctrl / Cmd + 3', action: 'Switch to Editor Mode' },
     { key: 'Ctrl / Cmd + B', action: 'Bold text (**)' },
     { key: 'Ctrl / Cmd + I', action: 'Italic text (*)' },
+    { key: 'Ctrl / Cmd + U', action: 'Underline text (<u>)' },
     { key: 'Ctrl / Cmd + /', action: 'Open Shortcuts Helper' },
     { key: 'Tab', action: 'Indent 2 spaces' },
     { key: 'Escape', action: 'Close modal / Exit presentation' },

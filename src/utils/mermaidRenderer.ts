@@ -112,9 +112,9 @@ export async function renderMermaidSvg(rawCode: string, isDark: boolean): Promis
           if (!isFinished) {
             isFinished = true;
             cleanupStrayElements(uniqueId);
-            reject(new Error('Diagram rendering timed out'));
+            resolve(`<div class="p-3 my-2 rounded-lg text-xs font-mono border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-left max-w-lg mx-auto"><div class="font-semibold mb-1">⚠️ Diagram Rendering Timeout</div><p class="opacity-80 text-[11px]">The diagram took too long to compile.</p></div>`);
           }
-        }, 3500);
+        }, 4000);
 
         try {
           const { svg } = await mermaid.render(uniqueId, trimmed);
@@ -125,7 +125,7 @@ export async function renderMermaidSvg(rawCode: string, isDark: boolean): Promis
             cleanupStrayElements(uniqueId);
             
             if (svg && svg.includes('<svg')) {
-              if (mermaidSvgCache.size >= 60) {
+              if (mermaidSvgCache.size >= 80) {
                 const firstKey = mermaidSvgCache.keys().next().value;
                 if (firstKey) mermaidSvgCache.delete(firstKey);
               }
@@ -133,7 +133,7 @@ export async function renderMermaidSvg(rawCode: string, isDark: boolean): Promis
               notifyMermaidUpdated();
               resolve(svg);
             } else {
-              reject(new Error('Mermaid returned empty SVG output'));
+              resolve(`<div class="p-3 my-2 rounded-lg text-xs font-mono border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-left max-w-lg mx-auto"><p class="text-[11px]">Empty diagram output</p></div>`);
             }
           }
         } catch (err: any) {
@@ -141,9 +141,19 @@ export async function renderMermaidSvg(rawCode: string, isDark: boolean): Promis
             isFinished = true;
             clearTimeout(timer);
             cleanupStrayElements(uniqueId);
-            reject(err);
+            const errMsg = err?.message || 'Diagram syntax error';
+            resolve(`
+              <div class="p-3 my-2 rounded-lg text-xs font-mono border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-left max-w-lg mx-auto">
+                <div class="font-semibold mb-1 flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>Mermaid Syntax Notice</span>
+                </div>
+                <p class="opacity-85 text-[11px] truncate">${errMsg}</p>
+              </div>
+            `);
           }
         }
+
       });
   });
 }

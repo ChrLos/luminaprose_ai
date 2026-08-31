@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo, useDeferredValue } from 'react';
 import { 
   Bold, 
   Italic, 
+  Underline,
   Strikethrough, 
   Heading1, 
   Heading2, 
@@ -23,17 +24,22 @@ import {
   ChevronDown,
   Check,
   Search,
-  Workflow
+  Workflow,
+  ArrowUpDown,
 } from 'lucide-react';
 import { ThemeConfig, TypographySettings } from '../types';
 import { ambientAudio } from '../utils/ambientAudio';
 import { transformCase, transformLinesList, CaseStyle, ListType } from '../utils/textTransform';
-import { checkSmartTypography, handleSmartQuote, SmartTransformRecord } from '../utils/smartTypography';
+import { checkSmartTypography, handleSmartQuote, isInsideCode, SmartTransformRecord } from '../utils/smartTypography';
+import { sortSelectedLinesInDocument, LineSortOptions } from '../utils/lineSorter';
+import { getDocScrollPosition, saveDocScrollPosition } from '../utils/scrollStore';
+import { calculateReadability } from '../utils/readability';
 import { FindReplaceBar } from './FindReplaceBar';
 import { SearchMinimapRuler } from './SearchMinimapRuler';
 import { TableBuilderModal } from './TableBuilderModal';
 
 interface EditorProps {
+  currentDocId?: string;
   value: string;
   onChange: (value: string, isImmediate?: boolean) => void;
   theme: ThemeConfig;
@@ -42,6 +48,7 @@ interface EditorProps {
   scrollRef?: React.RefObject<HTMLTextAreaElement | null>;
   onScrollSync?: (scrollTop: number, scrollHeight: number, clientHeight: number) => void;
   onScrollDirectionChange?: (isVisible: boolean) => void;
+  onInteraction?: (scroller: 'editor' | 'preview') => void;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -50,6 +57,7 @@ interface EditorProps {
 }
 
 export const Editor: React.FC<EditorProps> = React.memo(({
+  currentDocId,
   value,
   onChange,
   theme,
@@ -58,6 +66,7 @@ export const Editor: React.FC<EditorProps> = React.memo(({
   scrollRef,
   onScrollSync,
   onScrollDirectionChange,
+  onInteraction,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -80,6 +89,63 @@ export const Editor: React.FC<EditorProps> = React.memo(({
   const [isCaseMenuOpen, setIsCaseMenuOpen] = useState(false);
   const caseMenuRef = useRef<HTMLDivElement>(null);
 
+  // Line Sorting dropdown menu state
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const sortMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close menus on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (caseMenuRef.current && !caseMenuRef.current.contains(e.target as Node)) {
+        setIsCaseMenuOpen(false);
+      }
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
+        setIsSortMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  // Flag to suppress saving scroll during document switching / restoration
+  const isRestoringScrollRef = useRef(false);
+
+  // Restore persistent scroll position per document ID
+  useEffect(() => {
+    if (!currentDocId) return;
+    const saved = getDocScrollPosition(currentDocId);
+    const targetScroll = saved.editorScrollTop;
+    const textarea = textareaRef.current;
+
+    isRestoringScrollRef.current = true;
+
+    if (textarea) {
+      textarea.scrollTop = targetScroll;
+      lastScrollTopRef.current = targetScroll;
+    }
+
+    // Schedule multiple ticks to ensure layout/fonts/DOM have fully rendered
+    const r1 = requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      }
+    });
+
+    const t1 = setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      }
+      isRestoringScrollRef.current = false;
+    }, 120);
+
+    return () => {
+      cancelAnimationFrame(r1);
+      clearTimeout(t1);
+    };
+  }, [currentDocId]);
+
   // Smart Typography Backspace Record ref
   const lastSmartTransformRef = useRef<SmartTransformRecord | null>(null);
 
@@ -95,7 +161,37 @@ export const Editor: React.FC<EditorProps> = React.memo(({
   // Visual Table Builder Modal state
   const [isTableBuilderOpen, setIsTableBuilderOpen] = useState(false);
 
-  // Debounced parent notification
+  // Audio trigger ref & throttle
+  const triggerKeyAudio = useCallback((type: 'standard' | 'backspace' | 'enter' = 'standard') => {
+    if (!playTypewriterSound) return;
+    ambientAudio.playKeyClick(type);
+  }, [playTypewriterSound]);
+
+  // Cursor line tracking for Editor tracking guide ruler
+  const [cursorLineTop, setCursorLineTop] = useState<number | null>(null);
+
+  const updateCursorLineRuler = useCallback(() => {
+    if (!settings.readingGuide) {
+      if (cursorLineTop !== null) setCursorLineTop(null);
+      return;
+    }
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const selStart = textarea.selectionStart;
+    const textBeforeCursor = textarea.value.substring(0, selStart);
+    const lineNumber = textBeforeCursor.split('\n').length;
+
+    // Line height: standard mono 14px with leading-relaxed is approx 22.4px
+    const isLg = window.innerWidth >= 1024;
+    const paddingTop = isLg ? 32 : 24;
+    const approxLineHeight = 22.4;
+
+    const computedTop = (lineNumber - 1) * approxLineHeight + paddingTop - textarea.scrollTop;
+    setCursorLineTop(computedTop);
+  }, [settings.readingGuide, textareaRef, cursorLineTop]);
+
+  // Debounced parent notification with adaptive delay for large documents
   const notifyParent = useCallback((val: string, immediate = false) => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -105,9 +201,11 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     if (immediate) {
       onChange(val, true);
     } else {
+      const docLength = val.length;
+      const delay = docLength > 40000 ? 180 : docLength > 15000 ? 120 : 60;
       debounceTimerRef.current = setTimeout(() => {
         onChange(val, false);
-      }, 80);
+      }, delay);
     }
   }, [onChange]);
 
@@ -135,9 +233,23 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     }
   }, [value]);
 
-  // Compute all matches
+  // Defer heavy background calculations (readability, line metrics) during rapid typing
+  const deferredLocalValue = useDeferredValue(localValue);
+
+  // Compute readability metrics smoothly without blocking typing
+  const readabilityStats = useMemo(
+    () => calculateReadability(deferredLocalValue),
+    [deferredLocalValue]
+  );
+
+  const deferredLinesCount = useMemo(
+    () => (deferredLocalValue ? deferredLocalValue.split('\n').length : 1),
+    [deferredLocalValue]
+  );
+
+  // Compute all matches only when find panel is active
   const matches = useMemo(() => {
-    if (!findQuery) return [];
+    if (!isFindOpen || !findQuery) return [];
     const results: { start: number; end: number }[] = [];
     try {
       let escapedQuery = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -155,7 +267,7 @@ export const Editor: React.FC<EditorProps> = React.memo(({
       // Ignore invalid regex
     }
     return results;
-  }, [localValue, findQuery, matchCase, matchWholeWord]);
+  }, [isFindOpen, localValue, findQuery, matchCase, matchWholeWord]);
 
   // Sync match index when matches change
   useEffect(() => {
@@ -262,6 +374,18 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     const prevVal = localValue;
     setLocalValue(val);
     notifyParent(val, false);
+    updateCursorLineRuler();
+
+    // Trigger typewriter audio on mobile / Android virtual keyboard inputs
+    if (playTypewriterSound) {
+      if (val.length < prevVal.length) {
+        triggerKeyAudio('backspace');
+      } else if (val.endsWith('\n') || (val.length > prevVal.length && val[textarea?.selectionStart ? textarea.selectionStart - 1 : 0] === '\n')) {
+        triggerKeyAudio('enter');
+      } else if (val !== prevVal) {
+        triggerKeyAudio('standard');
+      }
+    }
 
     const diff = Math.abs(val.length - prevVal.length);
     charsSinceLastSnapshotRef.current += diff;
@@ -442,16 +566,45 @@ export const Editor: React.FC<EditorProps> = React.memo(({
     }, 0);
   };
 
+  // Modular line sorting transformer (Natural / Alphabetical, Ascending / Descending)
+  const handleSortTransform = (options: LineSortOptions) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    recordCurrentStateForHistory();
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    const result = sortSelectedLinesInDocument(localValue, start, end, options);
+
+    if (!result.newText || result.newText === localValue) {
+      setIsSortMenuOpen(false);
+      return;
+    }
+
+    setLocalValue(result.newText);
+    lastSnapshotValueRef.current = result.newText;
+    notifyParent(result.newText, true);
+    setIsSortMenuOpen(false);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.selectionStart = result.newSelectionStart;
+      textarea.selectionEnd = result.newSelectionEnd;
+    }, 0);
+  };
+
   // Handle typing key click sounds, indent, shortcuts, undo/redo, smart typography
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Mechanical key audio clicks: alphanumeric, tab, enter, backspace, delete
     if (playTypewriterSound) {
       if (e.key === 'Backspace' || e.key === 'Delete') {
-        ambientAudio.playKeyClick('backspace');
+        triggerKeyAudio('backspace');
       } else if (e.key === 'Enter') {
-        ambientAudio.playKeyClick('enter');
+        triggerKeyAudio('enter');
       } else if (e.key.length === 1 || e.key === 'Tab') {
-        ambientAudio.playKeyClick('standard');
+        triggerKeyAudio('standard');
       }
     }
 
@@ -461,9 +614,63 @@ export const Editor: React.FC<EditorProps> = React.memo(({
       if (textarea) {
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
-        const rec = lastSmartTransformRef.current;
 
-        if (rec && start === end && start === rec.end && textarea.value.length === rec.docLengthAfter) {
+        // Auto-closing pair deletion / smart quote reversion
+        if (start === end && start > 0 && start <= localValue.length) {
+          const charBefore = localValue[start - 1];
+          const charAfter = start < localValue.length ? localValue[start] : '';
+
+          // When cursor is between smart double quotes “|”, pressing Backspace reverts both to raw double pair ""
+          if (charBefore === '“' && charAfter === '”') {
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, start - 1) + '""' + localValue.substring(start + 1);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            lastSmartTransformRef.current = null;
+            notifyParent(newValue, true);
+
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+
+          // Auto-closing pair deletion for standard matching brackets & quotes
+          if (
+            (charBefore === '"' && charAfter === '"') ||
+            (charBefore === '[' && charAfter === ']') ||
+            (charBefore === '(' && charAfter === ')') ||
+            (charBefore === '{' && charAfter === '}')
+          ) {
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, start - 1) + localValue.substring(start + 1);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            lastSmartTransformRef.current = null;
+            notifyParent(newValue, true);
+
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start - 1;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+        }
+
+        const rec = lastSmartTransformRef.current;
+        if (
+          rec &&
+          start === end &&
+          (start === rec.end || start === rec.start + 1 || start === rec.start + rec.original.length) &&
+          textarea.value.length === rec.docLengthAfter
+        ) {
           const currentSlice = textarea.value.substring(rec.start, rec.end);
           if (currentSlice === rec.replaced) {
             e.preventDefault();
@@ -477,6 +684,7 @@ export const Editor: React.FC<EditorProps> = React.memo(({
             setTimeout(() => {
               if (textareaRef.current) {
                 textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+                updateCursorLineRuler();
               }
             }, 0);
             return;
@@ -491,23 +699,105 @@ export const Editor: React.FC<EditorProps> = React.memo(({
       }
     }
 
-    // 2. Smart Double & Single Quotes outside codeblocks
-    if ((e.key === '"' || e.key === "'") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // 2. Auto-Closing Pairs for double quotes ("" / “”), brackets ([]), and parentheses (())
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const textarea = textareaRef.current;
       if (textarea) {
-        const quoteRes = handleSmartQuote(localValue, textarea.selectionStart, textarea.selectionEnd, e.key as '"' | "'");
-        if (quoteRes) {
-          e.preventDefault();
-          setLocalValue(quoteRes.newText);
-          lastSmartTransformRef.current = quoteRes.record;
-          notifyParent(quoteRes.newText, false);
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
 
-          setTimeout(() => {
-            if (textareaRef.current) {
-              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = quoteRes.newCursor;
+        // Opening characters: ", [, (, {
+        if (e.key === '"' || e.key === '[' || e.key === '(' || e.key === '{') {
+          const inCode = isInsideCode(localValue, start);
+
+          // For double quotes outside code blocks, use formal smart quotes “ and ”
+          const openChar = e.key === '"' ? (inCode ? '"' : '“') : e.key;
+          const closingChar = e.key === '"' ? (inCode ? '"' : '”') : e.key === '[' ? ']' : e.key === '(' ? ')' : '}';
+
+          if (start !== end) {
+            // Text is selected -> wrap selection
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const selected = localValue.substring(start, end);
+            const newValue = localValue.substring(0, start) + openChar + selected + closingChar + localValue.substring(end);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            notifyParent(newValue, true);
+
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = start + openChar.length;
+                textareaRef.current.selectionEnd = end + openChar.length;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          } else {
+            // Overtype if cursor is already before the quote
+            if ((e.key === '"' && (localValue[start] === '"' || localValue[start] === '”'))) {
+              e.preventDefault();
+              textarea.selectionStart = textarea.selectionEnd = start + 1;
+              updateCursorLineRuler();
+              return;
             }
-          }, 0);
-          return;
+
+            // Insert pair and place cursor between them
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, start) + openChar + closingChar + localValue.substring(end);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+
+            // Track smart transform so single Backspace immediately reverts both “ and ” to raw "
+            if (!inCode && e.key === '"') {
+              lastSmartTransformRef.current = {
+                start,
+                end: start + openChar.length,
+                original: '"',
+                replaced: openChar + closingChar,
+                docLengthAfter: newValue.length,
+              };
+            }
+
+            notifyParent(newValue, true);
+
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + openChar.length;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+        }
+
+        // Overtype closing characters
+        if (e.key === ']' || e.key === ')' || e.key === '}') {
+          if (start === end && localValue[start] === e.key) {
+            e.preventDefault();
+            textarea.selectionStart = textarea.selectionEnd = start + 1;
+            updateCursorLineRuler();
+            return;
+          }
+        }
+
+        // Smart Single Quotes outside codeblocks
+        if (e.key === "'") {
+          const quoteRes = handleSmartQuote(localValue, start, end, "'");
+          if (quoteRes) {
+            e.preventDefault();
+            setLocalValue(quoteRes.newText);
+            lastSmartTransformRef.current = quoteRes.record;
+            notifyParent(quoteRes.newText, false);
+
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = quoteRes.newCursor;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
         }
       }
     }
@@ -517,6 +807,147 @@ export const Editor: React.FC<EditorProps> = React.memo(({
       e.preventDefault();
       setIsFindOpen(false);
       return;
+    }
+
+    // 3. Smart List & Task Checkbox Auto-continuation on Enter
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === textarea.selectionEnd) {
+        const cursorPos = textarea.selectionStart;
+        const lineStart = localValue.lastIndexOf('\n', cursorPos - 1) + 1;
+        let lineEnd = localValue.indexOf('\n', cursorPos);
+        if (lineEnd === -1) lineEnd = localValue.length;
+
+        const beforeCursorInLine = localValue.substring(lineStart, cursorPos);
+        const afterCursorInLine = localValue.substring(cursorPos, lineEnd);
+
+        // Regex patterns for list prefixes
+        // 1. Task Checkbox: (indent)(bullet or number)(checkbox [ ] or [x])(content)
+        const taskMatch = beforeCursorInLine.match(/^(\s*)([-*+]|\d+[.)])\s+\[([ xX])\]\s*(.*)$/);
+        // 2. Numbered / Ordered List: (indent)(number[.)])(content)
+        const orderedMatch = beforeCursorInLine.match(/^(\s*)(\d+)([.)])\s+(.*)$/);
+        // 3. Bullet List: (indent)(bullet)(content)
+        const bulletMatch = beforeCursorInLine.match(/^(\s*)([-*+])\s+(.*)$/);
+
+        if (taskMatch) {
+          const indent = taskMatch[1];
+          const marker = taskMatch[2];
+          const content = taskMatch[4];
+
+          // Empty item check -> Escape list mode if user hits Enter on empty task line
+          if (!content.trim() && !afterCursorInLine.trim()) {
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, lineStart) + indent + localValue.substring(lineEnd);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            notifyParent(newValue, true);
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = lineStart + indent.length;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+
+          e.preventDefault();
+          recordCurrentStateForHistory();
+          let nextPrefix = '';
+          if (/^\d+/.test(marker)) {
+            const num = parseInt(marker, 10) + 1;
+            const delimiter = marker.endsWith('.') ? '.' : ')';
+            nextPrefix = `${indent}${num}${delimiter} [ ] `;
+          } else {
+            nextPrefix = `${indent}${marker} [ ] `;
+          }
+
+          const newValue = localValue.substring(0, cursorPos) + '\n' + nextPrefix + localValue.substring(cursorPos);
+          setLocalValue(newValue);
+          lastSnapshotValueRef.current = newValue;
+          notifyParent(newValue, true);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = cursorPos + 1 + nextPrefix.length;
+              updateCursorLineRuler();
+            }
+          }, 0);
+          return;
+        } else if (orderedMatch) {
+          const indent = orderedMatch[1];
+          const num = parseInt(orderedMatch[2], 10);
+          const delimiter = orderedMatch[3];
+          const content = orderedMatch[4];
+
+          // Empty item check -> Escape list mode
+          if (!content.trim() && !afterCursorInLine.trim()) {
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, lineStart) + indent + localValue.substring(lineEnd);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            notifyParent(newValue, true);
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = lineStart + indent.length;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+
+          e.preventDefault();
+          recordCurrentStateForHistory();
+          const nextPrefix = `${indent}${num + 1}${delimiter} `;
+          const newValue = localValue.substring(0, cursorPos) + '\n' + nextPrefix + localValue.substring(cursorPos);
+          setLocalValue(newValue);
+          lastSnapshotValueRef.current = newValue;
+          notifyParent(newValue, true);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = cursorPos + 1 + nextPrefix.length;
+              updateCursorLineRuler();
+            }
+          }, 0);
+          return;
+        } else if (bulletMatch) {
+          const indent = bulletMatch[1];
+          const bullet = bulletMatch[2];
+          const content = bulletMatch[3];
+
+          // Empty item check -> Escape list mode
+          if (!content.trim() && !afterCursorInLine.trim()) {
+            e.preventDefault();
+            recordCurrentStateForHistory();
+            const newValue = localValue.substring(0, lineStart) + indent + localValue.substring(lineEnd);
+            setLocalValue(newValue);
+            lastSnapshotValueRef.current = newValue;
+            notifyParent(newValue, true);
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = lineStart + indent.length;
+                updateCursorLineRuler();
+              }
+            }, 0);
+            return;
+          }
+
+          e.preventDefault();
+          recordCurrentStateForHistory();
+          const nextPrefix = `${indent}${bullet} `;
+          const newValue = localValue.substring(0, cursorPos) + '\n' + nextPrefix + localValue.substring(cursorPos);
+          setLocalValue(newValue);
+          lastSnapshotValueRef.current = newValue;
+          notifyParent(newValue, true);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = cursorPos + 1 + nextPrefix.length;
+              updateCursorLineRuler();
+            }
+          }, 0);
+          return;
+        }
+      }
     }
 
     // Tab key indent support (2 spaces)
@@ -537,6 +968,7 @@ export const Editor: React.FC<EditorProps> = React.memo(({
 
       setTimeout(() => {
         textarea.selectionStart = textarea.selectionEnd = start + 2;
+        updateCursorLineRuler();
       }, 0);
       return;
     }
@@ -604,6 +1036,13 @@ export const Editor: React.FC<EditorProps> = React.memo(({
         return;
       }
 
+      // Underline: Ctrl+U / Cmd+U
+      if (e.key === 'u' || e.key === 'U') {
+        e.preventDefault();
+        insertWrap('<u>', '</u>', 'underlined text');
+        return;
+      }
+
       // Hyperlink: Ctrl+K
       if (e.key === 'k' || e.key === 'K') {
         e.preventDefault();
@@ -615,9 +1054,15 @@ export const Editor: React.FC<EditorProps> = React.memo(({
 
   // Scroll sync handler & direction detection
   const handleScroll = () => {
+    updateCursorLineRuler();
     if (!textareaRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = textareaRef.current;
     
+    // Persist per-document scroll offset (only when not in the middle of restoring)
+    if (currentDocId && !isRestoringScrollRef.current) {
+      saveDocScrollPosition(currentDocId, { editorScrollTop: scrollTop });
+    }
+
     if (onScrollSync) {
       onScrollSync(scrollTop, scrollHeight, clientHeight);
     }
@@ -743,6 +1188,14 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           </button>
           <button
             type="button"
+            onClick={() => insertWrap('<u>', '</u>', 'underlined text')}
+            className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
+            title="Underline (Ctrl+U)"
+          >
+            <Underline className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
             onClick={() => insertWrap('~~', '~~', 'strikethrough')}
             className="p-1.5 rounded hover:bg-stone-500/10 transition-colors cursor-pointer"
             title="Strikethrough"
@@ -840,6 +1293,78 @@ export const Editor: React.FC<EditorProps> = React.memo(({
                 >
                   <span>snake_case</span>
                   <span className="text-[10px] opacity-50 font-mono">aa_bb</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Sort Lines Dropdown */}
+          <div className="relative inline-block" ref={sortMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsSortMenuOpen((prev) => !prev)}
+              className={`flex items-center gap-0.5 px-1.5 py-1 rounded transition-colors cursor-pointer font-medium ${
+                isSortMenuOpen ? 'bg-stone-500/20' : 'hover:bg-stone-500/10'
+              }`}
+              title="Sort Lines (Ascending, Descending, Natural, Alphabetical)"
+            >
+              <ArrowUpDown className="w-3.5 h-3.5" />
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+
+            {isSortMenuOpen && (
+              <div 
+                className="absolute left-0 top-full mt-1.5 w-52 rounded-lg shadow-2xl border py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100"
+                style={{
+                  backgroundColor: theme.bgElevated,
+                  borderColor: theme.border,
+                  color: theme.text,
+                }}
+              >
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider opacity-50 border-b pb-1 mb-1" style={{ borderColor: theme.border }}>
+                  Sort Lines
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSortTransform({ algorithm: 'natural', direction: 'asc' })}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Sort Ascending</span>
+                  <span className="text-[10px] opacity-50 font-mono">A → Z (1, 2, 10)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSortTransform({ algorithm: 'natural', direction: 'desc' })}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Sort Descending</span>
+                  <span className="text-[10px] opacity-50 font-mono">Z → A (10, 2, 1)</span>
+                </button>
+                <div className="my-1 border-t opacity-40" style={{ borderColor: theme.border }} />
+                <button
+                  type="button"
+                  onClick={() => handleSortTransform({ algorithm: 'alphabetical', direction: 'asc' })}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Alphabetical Ascending</span>
+                  <span className="text-[10px] opacity-50 font-mono">A-Z Strict</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSortTransform({ algorithm: 'alphabetical', direction: 'desc' })}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Alphabetical Descending</span>
+                  <span className="text-[10px] opacity-50 font-mono">Z-A Strict</span>
+                </button>
+                <div className="my-1 border-t opacity-40" style={{ borderColor: theme.border }} />
+                <button
+                  type="button"
+                  onClick={() => handleSortTransform({ algorithm: 'reverse' })}
+                  className="w-full text-left px-3 py-1.5 hover:bg-stone-500/15 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span>Reverse Line Order</span>
+                  <span className="text-[10px] opacity-50 font-mono">Flip</span>
                 </button>
               </div>
             )}
@@ -1042,12 +1567,38 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           />
         )}
 
+        {/* Subtle Tracking Guide Ruler aligned to current cursor line */}
+        {settings.readingGuide && cursorLineTop !== null && cursorLineTop >= 0 && (
+          <div 
+            className="pointer-events-none absolute left-0 right-0 h-6.5 -translate-y-1 transition-all duration-75 z-10 opacity-20"
+            style={{ 
+              top: `${cursorLineTop}px`,
+              backgroundColor: theme.accent,
+              borderTop: `1px dashed ${theme.accent}`,
+              borderBottom: `1px dashed ${theme.accent}`,
+            }} 
+          />
+        )}
+
         <textarea
           ref={textareaRef}
           value={localValue}
           onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
           onScroll={handleScroll}
+          onClick={updateCursorLineRuler}
+          onKeyUp={updateCursorLineRuler}
+          onSelect={updateCursorLineRuler}
+          onPointerEnter={() => onInteraction?.('editor')}
+          onPointerDown={() => {
+            onInteraction?.('editor');
+            ambientAudio.unlockAudio();
+          }}
+          onTouchStart={() => {
+            onInteraction?.('editor');
+            ambientAudio.unlockAudio();
+          }}
+          onWheel={() => onInteraction?.('editor')}
           spellCheck="false"
           placeholder="Start writing in clean Markdown or paste your content here..."
           className="w-full h-full p-6 lg:p-8 resize-none outline-none font-mono text-[14px] leading-relaxed overflow-y-auto transition-colors"
@@ -1060,12 +1611,14 @@ export const Editor: React.FC<EditorProps> = React.memo(({
         />
 
         {/* Visual Markdown Table Generator & Cell Editor Modal */}
-        <TableBuilderModal
-          isOpen={isTableBuilderOpen}
-          onClose={() => setIsTableBuilderOpen(false)}
-          onInsertTable={(tableMd) => insertBlock(tableMd)}
-          theme={theme}
-        />
+        {isTableBuilderOpen && (
+          <TableBuilderModal
+            isOpen={isTableBuilderOpen}
+            onClose={() => setIsTableBuilderOpen(false)}
+            onInsertTable={(tableMd) => insertBlock(tableMd)}
+            theme={theme}
+          />
+        )}
       </div>
 
       {/* Editor Bottom Status Bar */}
@@ -1077,14 +1630,21 @@ export const Editor: React.FC<EditorProps> = React.memo(({
           color: theme.textMuted,
         }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <span>Markdown Source</span>
-          <span>•</span>
-          <span>{localValue.split('\n').length} lines</span>
+          <span className="opacity-40">•</span>
+          <span>{deferredLinesCount} lines</span>
+          <span className="opacity-40">•</span>
+          <span className="font-semibold" title="Filtered Prose Word Count (excludes code blocks, math, markdown syntax)">
+            {readabilityStats.words.toLocaleString()} words
+          </span>
+          <span className="opacity-60" title="Full Context Raw Word Count (all tokens across document)">
+            ({readabilityStats.rawWords.toLocaleString()} raw)
+          </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <span>UTF-8</span>
-          <span>•</span>
+          <span className="opacity-40">•</span>
           <span>{localValue.length} chars</span>
         </div>
       </div>

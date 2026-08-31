@@ -99,14 +99,27 @@ export function countMarkdownSentences(markdown: string): number {
   return Math.max(1, totalSentences);
 }
 
+const readabilityCache = new Map<string, ReadabilityMetrics>();
+const MAX_READABILITY_CACHE = 40;
+
+export function clearReadabilityCache() {
+  readabilityCache.clear();
+}
+
 export function calculateReadability(markdown: string): ReadabilityMetrics {
   if (!markdown || !markdown.trim()) {
     return {
       words: 0,
+      rawWords: 0,
+      omittedWords: 0,
       characters: 0,
       charactersNoSpaces: 0,
+      proseCharacters: 0,
       paragraphs: 0,
       headings: 0,
+      codeBlocksCount: 0,
+      mathBlocksCount: 0,
+      lines: 0,
       readingTimeMinutes: 0,
       speakingTimeMinutes: 0,
       fleschKincaidScore: 100,
@@ -114,22 +127,45 @@ export function calculateReadability(markdown: string): ReadabilityMetrics {
     };
   }
 
-  // Strip code blocks and images for accurate text metrics
-  const cleanText = markdown
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`[^`]+`/g, '')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[#*>\-_~`]/g, ' ')
+  if (readabilityCache.has(markdown)) {
+    return readabilityCache.get(markdown)!;
+  }
+
+  // 1. Raw word count & raw token analysis (includes everything in the source)
+  const rawWordsArray = markdown.match(/\b[a-zA-Z0-9_\u00C0-\u017F'-]+\b/g) || [];
+  const rawWords = rawWordsArray.length;
+  const lines = markdown.split('\n').length;
+  const codeBlocksCount = (markdown.match(/```[\s\S]*?```/g) || []).length;
+  const mathBlocksCount = (markdown.match(/\$\$[\s\S]*?\$\$/g) || []).length;
+
+  // 2. Filtered Prose Text: strips non-prose elements for authentic reading metrics
+  const cleanProse = markdown
+    .replace(/^---[\s\S]*?---\s*\n/g, '') // YAML frontmatter
+    .replace(/```[\s\S]*?```/g, '') // Fenced code blocks
+    .replace(/\$\$[\s\S]*?\$\$/g, '') // Display LaTeX Math
+    .replace(/\$[^\$\n]+?\$/g, '') // Inline LaTeX Math
+    .replace(/`[^`\n]+`/g, '') // Inline code
+    .replace(/<!--[\s\S]*?-->/g, '') // HTML comments
+    .replace(/<[^>]*>/g, '') // HTML tags
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // Images
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // Extract link anchor text only
+    .replace(/^(\s*[-*+]|\s*\d+[.)])\s+\[([ xX])\]\s*/gm, '') // Checkboxes
+    .replace(/^#{1,6}\s+/gm, '') // Heading markers
+    .replace(/^>\s*/gm, '') // Blockquote markers
+    .replace(/^([-*_]\s*){3,}$/gm, '') // Horizontal rules
+    .replace(/[*_~=`]/g, ' ') // Inline markdown markers
+    .replace(/\|/g, ' ') // Table cell borders
     .trim();
 
-  // Words count
-  const wordsArray = cleanText.match(/\b[a-zA-Z0-9_\u00C0-\u017F'-]+\b/g) || [];
+  // Filtered prose words
+  const wordsArray = cleanProse.match(/\b[a-zA-Z0-9_\u00C0-\u017F'-]+\b/g) || [];
   const words = wordsArray.length;
+  const omittedWords = Math.max(0, rawWords - words);
 
   // Characters
   const characters = markdown.length;
   const charactersNoSpaces = markdown.replace(/\s+/g, '').length;
+  const proseCharacters = cleanProse.length;
 
   // Paragraphs
   const paragraphs = markdown
@@ -145,7 +181,7 @@ export function calculateReadability(markdown: string): ReadabilityMetrics {
   // Speaking time (approx 130 words per minute)
   const speakingTimeMinutes = Math.max(1, Math.ceil(words / 130));
 
-  // Markdown-aware structural sentence counting (Option 2)
+  // Markdown-aware structural sentence counting
   const sentences = countMarkdownSentences(markdown);
   
   let totalSyllables = 0;
@@ -172,25 +208,61 @@ export function calculateReadability(markdown: string): ReadabilityMetrics {
     else gradeLevel = 'Academic / Graduate (Very Difficult)';
   }
 
-  return {
+  const result: ReadabilityMetrics = {
     words,
+    rawWords,
+    omittedWords,
     characters,
     charactersNoSpaces,
+    proseCharacters,
     paragraphs: Math.max(1, paragraphs),
     headings,
+    codeBlocksCount,
+    mathBlocksCount,
+    lines,
     readingTimeMinutes: words === 0 ? 0 : readingTimeMinutes,
     speakingTimeMinutes: words === 0 ? 0 : speakingTimeMinutes,
     fleschKincaidScore: fleschScore,
     gradeLevelText: gradeLevel,
   };
+
+  if (readabilityCache.size >= MAX_READABILITY_CACHE) {
+    const firstKey = readabilityCache.keys().next().value;
+    if (firstKey) readabilityCache.delete(firstKey);
+  }
+  readabilityCache.set(markdown, result);
+
+  return result;
 }
 
+// Word Syllables LRU cache to prevent repeated regex evaluations
+const syllableCache = new Map<string, number>();
+const MAX_SYLLABLE_CACHE = 4000;
+
 function countSyllables(word: string): number {
-  word = word.toLowerCase();
-  if (word.length <= 3) return 1;
-  word = word.replace(/(?:[^laeiouy]|ed|es|e)$/, '');
-  word = word.replace(/^y/, '');
-  const syl = word.match(/[aeiouy]{1,2}/g);
-  return syl ? Math.max(1, syl.length) : 1;
+  if (!word) return 1;
+  const lower = word.toLowerCase();
+  
+  if (syllableCache.has(lower)) {
+    return syllableCache.get(lower)!;
+  }
+
+  let count = 1;
+  if (lower.length <= 3) {
+    count = 1;
+  } else {
+    const cleaned = lower.replace(/(?:[^laeiouy]|ed|es|e)$/, '').replace(/^y/, '');
+    const syl = cleaned.match(/[aeiouy]{1,2}/g);
+    count = syl ? Math.max(1, syl.length) : 1;
+  }
+
+  if (syllableCache.size >= MAX_SYLLABLE_CACHE) {
+    const firstKey = syllableCache.keys().next().value;
+    if (firstKey) syllableCache.delete(firstKey);
+  }
+  syllableCache.set(lower, count);
+
+  return count;
 }
+
 

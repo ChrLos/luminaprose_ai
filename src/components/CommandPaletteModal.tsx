@@ -100,6 +100,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
 }) => {
   const [search, setSearch] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [docsLimit, setDocsLimit] = useState(8);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const modalContainerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose, inputRef);
@@ -108,18 +109,19 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
     if (isOpen) {
       setSearch('');
       setSelectedIndex(0);
+      setDocsLimit(8);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
 
-  // Build Command Items List in Exact Category Order with useMemo for high performance
+  // Build Command Items List with Recent Files, Documents, and Action items
   const commands = useMemo<CommandItem[]>(() => {
     const recentDocs = [...documents]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 5);
 
     return [
-      // 1. --- RECENT FILES (Top 5) ---
+      // 1. --- RECENT FILES (Top 5 most recent) ---
       ...recentDocs.map((doc) => ({
         id: `recent-doc-${doc.id}`,
         title: doc.title,
@@ -135,7 +137,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
         },
       })),
 
-      // 2. --- DOCUMENTS ---
+      // 2. --- DOCUMENTS (All Documents) ---
       {
         id: 'doc-create-new',
         title: 'Create New Blank Document',
@@ -150,7 +152,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       ...documents.map((doc) => ({
         id: `doc-${doc.id}`,
         title: doc.title,
-        subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${doc.content.split(/\s+/).filter(Boolean).length} words`,
+        subtitle: `Updated ${new Date(doc.updatedAt).toLocaleDateString()} • ${
+          doc.content.split(/\s+/).filter(Boolean).length
+        } words`,
         category: 'Documents' as const,
         icon: <FileText className="w-4 h-4 text-stone-400" />,
         badge: doc.id === currentDocId ? 'ACTIVE' : undefined,
@@ -300,7 +304,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       {
         id: 'act-changelog',
         title: "What's New in Lumina Prose (Release Notes)",
-        subtitle: 'View features, enhancements, and performance updates in v1.1.0',
+        subtitle: 'View features, enhancements, and performance updates in v1.2.0',
         category: 'Actions' as const,
         icon: <Sparkles className="w-4 h-4 text-amber-500" />,
         perform: () => {
@@ -470,25 +474,55 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       .sort((a, b) => (CATEGORY_ORDER[a.category] || 99) - (CATEGORY_ORDER[b.category] || 99));
   }, [commands, search]);
 
+  // Separate Documents from other categories so only the "Documents" category is paginated
+  const { displayedCommands, remainingDocsCount } = useMemo(() => {
+    const docItems = filteredCommands.filter((cmd) => cmd.category === 'Documents');
+    const otherItemsBefore = filteredCommands.filter((cmd) => cmd.category === 'Recent Files');
+    const otherItemsAfter = filteredCommands.filter(
+      (cmd) => cmd.category !== 'Recent Files' && cmd.category !== 'Documents'
+    );
+
+    const visibleDocs = docItems.slice(0, docsLimit);
+    const remaining = Math.max(0, docItems.length - docsLimit);
+
+    return {
+      displayedCommands: [...otherItemsBefore, ...visibleDocs, ...otherItemsAfter],
+      remainingDocsCount: remaining,
+    };
+  }, [filteredCommands, docsLimit]);
+
   // Clamp selection index
   useEffect(() => {
-    if (selectedIndex >= filteredCommands.length) {
-      setSelectedIndex(Math.max(0, filteredCommands.length - 1));
+    if (selectedIndex >= displayedCommands.length) {
+      setSelectedIndex(Math.max(0, displayedCommands.length - 1));
     }
-  }, [filteredCommands.length, selectedIndex]);
+  }, [displayedCommands.length, selectedIndex]);
 
   // Handle keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev + 1) % Math.max(1, filteredCommands.length));
+      // If we are on the last visible doc item in "Documents" and more are available, expand on down-arrow
+      const currentItem = displayedCommands[selectedIndex];
+      const nextItem = displayedCommands[selectedIndex + 1];
+      const isLastVisibleDoc =
+        currentItem?.category === 'Documents' &&
+        (!nextItem || nextItem.category !== 'Documents') &&
+        remainingDocsCount > 0;
+
+      if (isLastVisibleDoc) {
+        setDocsLimit((prev) => prev + 8);
+        setSelectedIndex((prev) => prev + 1);
+      } else {
+        setSelectedIndex((prev) => (prev + 1) % Math.max(1, displayedCommands.length));
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev - 1 + filteredCommands.length) % Math.max(1, filteredCommands.length));
+      setSelectedIndex((prev) => (prev - 1 + displayedCommands.length) % Math.max(1, displayedCommands.length));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (filteredCommands[selectedIndex]) {
-        filteredCommands[selectedIndex].perform();
+      if (displayedCommands[selectedIndex]) {
+        displayedCommands[selectedIndex].perform();
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -560,80 +594,103 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
           ref={listRef}
           className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-none"
         >
-          {filteredCommands.length === 0 ? (
+          {displayedCommands.length === 0 ? (
             <div className="py-12 text-center text-sm opacity-60">
               No actions or documents match &quot;{search}&quot;
             </div>
           ) : (
-            filteredCommands.map((item, idx) => {
-              const isSelected = idx === selectedIndex;
-              const showCategoryHeader =
-                idx === 0 || item.category !== filteredCommands[idx - 1].category;
+            <>
+              {displayedCommands.map((item, idx) => {
+                const isSelected = idx === selectedIndex;
+                const showCategoryHeader =
+                  idx === 0 || item.category !== displayedCommands[idx - 1].category;
 
-              return (
-                <React.Fragment key={item.id}>
-                  {showCategoryHeader && (
-                    <div
-                      className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider opacity-50 select-none"
-                      style={{ color: theme.text }}
-                    >
-                      {item.category}
-                    </div>
-                  )}
-                  <div
-                    data-selected={isSelected}
-                    onClick={() => item.perform()}
-                    onMouseEnter={() => setSelectedIndex(idx)}
-                    className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-colors text-sm ${
-                      isSelected ? 'shadow-xs font-medium' : 'opacity-85 hover:opacity-100'
-                    }`}
-                    style={{
-                      backgroundColor: isSelected ? theme.bgElevated : 'transparent',
-                      borderLeft: isSelected ? `3px solid ${theme.accent}` : '3px solid transparent',
-                    }}
-                  >
-                    <div className="flex items-center gap-3 min-w-0 pr-2">
-                      <div className="p-1.5 rounded-md border shrink-0 opacity-90" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
-                        {item.icon}
+                const isLastVisibleDoc =
+                  item.category === 'Documents' &&
+                  (idx === displayedCommands.length - 1 ||
+                    displayedCommands[idx + 1].category !== 'Documents');
+
+                return (
+                  <React.Fragment key={item.id}>
+                    {showCategoryHeader && (
+                      <div
+                        className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider opacity-50 select-none"
+                        style={{ color: theme.text }}
+                      >
+                        {item.category}
                       </div>
-                      <div className="truncate">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium truncate">{item.title}</span>
-                          {item.badge && (
-                            <span
-                              className="text-[10px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wide shrink-0"
-                              style={{
-                                borderColor: theme.accent,
-                                color: theme.accent,
-                              }}
-                            >
-                              {item.badge}
-                            </span>
+                    )}
+                    <div
+                      data-selected={isSelected}
+                      onClick={() => item.perform()}
+                      onMouseEnter={() => setSelectedIndex(idx)}
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-colors text-sm ${
+                        isSelected ? 'shadow-xs font-medium' : 'opacity-85 hover:opacity-100'
+                      }`}
+                      style={{
+                        backgroundColor: isSelected ? theme.bgElevated : 'transparent',
+                        borderLeft: isSelected ? `3px solid ${theme.accent}` : '3px solid transparent',
+                      }}
+                    >
+                      <div className="flex items-center gap-3 min-w-0 pr-2">
+                        <div className="p-1.5 rounded-md border shrink-0 opacity-90" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
+                          {item.icon}
+                        </div>
+                        <div className="truncate">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium truncate">{item.title}</span>
+                            {item.badge && (
+                              <span
+                                className="text-[10px] font-bold px-1.5 py-0.2 rounded border uppercase tracking-wide shrink-0"
+                                style={{
+                                  borderColor: theme.accent,
+                                  color: theme.accent,
+                                }}
+                              >
+                                {item.badge}
+                              </span>
+                            )}
+                          </div>
+                          {item.subtitle && (
+                            <div className="text-xs opacity-60 truncate mt-0.5">
+                              {item.subtitle}
+                            </div>
                           )}
                         </div>
-                        {item.subtitle && (
-                          <div className="text-xs opacity-60 truncate mt-0.5">
-                            {item.subtitle}
-                          </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {item.shortcut && (
+                          <kbd
+                            className="px-2 py-0.5 text-[10px] font-mono font-semibold rounded border opacity-70"
+                            style={{ borderColor: theme.border, backgroundColor: theme.bg }}
+                          >
+                            {item.shortcut}
+                          </kbd>
                         )}
+                        {isSelected && <ChevronRight className="w-4 h-4 opacity-70" style={{ color: theme.accent }} />}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {item.shortcut && (
-                        <kbd
-                          className="px-2 py-0.5 text-[10px] font-mono font-semibold rounded border opacity-70"
-                          style={{ borderColor: theme.border, backgroundColor: theme.bg }}
-                        >
-                          {item.shortcut}
-                        </kbd>
-                      )}
-                      {isSelected && <ChevronRight className="w-4 h-4 opacity-70" style={{ color: theme.accent }} />}
-                    </div>
-                  </div>
-                </React.Fragment>
-              );
-            })
+                    {/* Expand button placed exclusively under Documents */}
+                    {isLastVisibleDoc && remainingDocsCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setDocsLimit((prev) => prev + 8)}
+                        className="w-full py-2 px-3 my-1 text-xs font-medium rounded-lg border border-dashed hover:bg-stone-500/10 transition-colors flex items-center justify-center gap-1.5 cursor-pointer opacity-80 hover:opacity-100"
+                        style={{
+                          borderColor: theme.border,
+                          color: theme.accent,
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+{remainingDocsCount} more documents</span>
+                      </button>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </>
           )}
         </div>
 
@@ -652,7 +709,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
             </span>
           </div>
           <span>
-            {filteredCommands.length} commands available
+            {filteredCommands.length} items ({commands.length} total)
           </span>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Sparkles, Palette, Zap, Wrench, Rocket, Check } from 'lucide-react';
+import { X, Sparkles, Palette, Zap, Wrench, Shield, AlertTriangle, Rocket, Check } from 'lucide-react';
 import { ThemeConfig } from '../types';
 import { useFocusTrap } from '../utils/useFocusTrap';
 
@@ -14,7 +14,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
   isOpen,
   onClose,
   theme,
-  version = 'v1.1.1',
+  version = '1.2.0',
 }) => {
   const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
 
@@ -22,98 +22,110 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
 
   const SECTIONS = [
     {
-      title: 'New features',
+      title: 'New Features',
       badge: '✨',
       icon: <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />,
       colorClass: 'border-amber-500/20 bg-amber-500/5',
       items: [
         {
-          feature: 'Visual table generator.',
-          desc: 'You can build and edit tables in an interactive spreadsheet grid with column alignment controls and starter templates.',
+          feature: 'Recycle bin.',
+          desc: 'Deleted documents now stay in a dedicated Recycle Bin for 14 days before permanent removal, allowing easy restoration.',
         },
         {
-          feature: 'Find and replace.',
-          desc: 'A dedicated search bar lets you locate matches, navigate between occurrences, and replace text across your document.',
+          feature: 'Storage recovery scanner.',
+          desc: 'A new storage scanner checks legacy browser storage slots and snapshot records to recover previously saved notes.',
         },
         {
-          feature: 'Smart typography.',
-          desc: 'The editor converts typed arrows and quotes into typographical symbols as you write, and pressing Backspace immediately restores the raw characters.',
+          feature: 'Dual word count.',
+          desc: 'The status bar and reader view now show readable prose words and total raw tokens separately, along with a detailed metrics popover.',
         },
         {
-          feature: 'Mermaid diagram viewer.',
-          desc: 'Mermaid diagrams render directly in preview and presentation modes. You can expand any diagram into a full-screen canvas to pan and zoom.',
+          feature: 'Copy selection as markdown.',
+          desc: 'You can now highlight any text in the reader view and copy it directly to your clipboard as clean Markdown syntax.',
         },
         {
-          feature: 'Interactive HTML exports.',
-          desc: 'Exported HTML files include an interactive diagram viewer with pan controls, zoom up to 2500%, and direct SVG downloads.',
+          feature: 'Smart list continuation.',
+          desc: 'Pressing Enter on bullet lists, numbered items, or task checkboxes automatically continues the list on the next line.',
         },
         {
-          feature: 'Search minimap ruler.',
-          desc: 'A scrollbar ruler highlights where search matches appear across the document so you can jump to any match with one click.',
+          feature: 'Line sorting tool.',
+          desc: 'You can now sort highlighted lines alphabetically or naturally by number directly from the editor toolbar.',
         },
         {
-          feature: 'List style converter.',
-          desc: 'You can switch bullet lists into checklists and back, or format multiple selected lines at once.',
+          feature: 'Side-by-side snapshot comparison.',
+          desc: 'Version history now includes a comparison view to inspect line-by-line differences before restoring an older version.',
         },
         {
-          feature: 'Case conversion menu.',
-          desc: 'A toolbar dropdown converts selected text to Sentence case, Title Case, uppercase, lowercase, camelCase, kebab-case, or snake_case.',
+          feature: 'Underline formatting.',
+          desc: 'You can now underline text using the editor toolbar, keyboard shortcuts, or standard underline tags.',
         },
       ],
     },
     {
-      title: 'UI/UX improvements',
+      title: 'UI/UX Improvements',
       badge: '🎨',
       icon: <Palette className="w-4 h-4 text-purple-500 shrink-0" />,
       colorClass: 'border-purple-500/20 bg-purple-500/5',
       items: [
         {
-          feature: 'Reordered navigation bar.',
-          desc: 'The scroll sync toggle now sits between the command palette and atmosphere controls, and the central toolbar stays anchored during view switches.',
+          feature: 'Improved light theme readability.',
+          desc: 'Fixed low-contrast text and bright notification banners across the document manager and Recycle Bin when using light themes.',
         },
         {
-          feature: 'Updated shortcuts.',
-          desc: 'The command palette now opens with Ctrl + P or Cmd + P, leaving Ctrl + K and Cmd + K free for markdown hyperlinks.',
+          feature: 'Collapsible outline navigation.',
+          desc: 'Headings in the document outline can now be folded, and the active section automatically highlights as you scroll.',
         },
         {
-          feature: 'Mechanical keyboard audio.',
-          desc: 'Deleting characters with Backspace and pressing Enter trigger distinct acoustic click profiles.',
+          feature: 'Paginated command palette.',
+          desc: 'Document listings in the quick command palette now display in clean batches of 8 items to keep actions easy to find.',
         },
         {
-          feature: 'Command palette structure.',
-          desc: 'Commands follow a set category order: Recent Files, Documents, Templates, Actions, View, and Themes.',
+          feature: 'Cleaned up search layout.',
+          desc: 'Search and replace inputs now fit within mobile and split-screen viewports without causing layout overflow.',
         },
         {
-          feature: 'Case dropdown display.',
-          desc: 'The case conversion menu floats over the editor panes with a drop shadow instead of clipping inside the toolbar.',
-        },
-        {
-          feature: 'Modal keyboard focus.',
-          desc: 'Dialogs trap keyboard focus inside their containers until you press Escape.',
+          feature: 'Refined HTML exports.',
+          desc: 'Exported standalone HTML documents now match the preview pane typography and include a collapsible outline.',
         },
       ],
     },
     {
-      title: 'Performance and speed',
+      title: 'Performance and Speed',
       badge: '⚡',
       icon: <Zap className="w-4 h-4 text-emerald-500 shrink-0" />,
       colorClass: 'border-emerald-500/20 bg-emerald-500/5',
       items: [
         {
-          feature: 'Instant diagram rendering.',
-          desc: 'Rendered diagrams are stored in memory so switching views or scrolling loads existing diagrams without flashing or delay.',
+          feature: 'Smoother split-view scrolling.',
+          desc: 'Rebuilt the dual-pane sync engine with binary search alignment and animation frame batching to eliminate stutter during fast scrolling.',
         },
         {
-          feature: 'Fast typing in long documents.',
-          desc: 'Word counts and command lists update only when necessary, keeping the editor responsive during heavy typing sessions.',
+          feature: 'Fast Myers diff engine.',
+          desc: 'Replaced the revision comparison engine with the Myers diff algorithm, accelerating line comparisons on large documents.',
         },
         {
-          feature: 'Version history virtualization.',
-          desc: 'The version history drawer renders only visible snapshots on screen, cutting DOM size on long revision timelines.',
+          feature: 'Math formula caching.',
+          desc: 'Rendered KaTeX equations are now cached in memory to eliminate re-rendering pauses while editing text around math formulas.',
         },
         {
-          feature: 'Smooth split scrolling.',
-          desc: 'The two-way scroll engine tracks the active pane to stop layout jitter and scrolling feedback loops.',
+          feature: 'Responsive typing loop.',
+          desc: 'Readability analysis and background metric calculations now run on deferred schedules so typing remains smooth at 60 frames per second.',
+        },
+        {
+          feature: 'Fast search minimap.',
+          desc: 'Optimized the search scrollbar minimap to handle thousands of matches without slowing down typing.',
+        },
+        {
+          feature: 'Cached bionic reading.',
+          desc: 'Cached paragraph text structures for bionic reading to eliminate repeated parsing pauses during scrolling.',
+        },
+        {
+          feature: 'On-demand PDF module loading.',
+          desc: 'Heavy PDF export libraries now load only when you open the export window, reducing initial startup weight.',
+        },
+        {
+          feature: 'Efficient modal rendering.',
+          desc: 'Inactive popups and drawers no longer participate in background render passes while you type.',
         },
       ],
     },
@@ -124,28 +136,72 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
       colorClass: 'border-sky-500/20 bg-sky-500/5',
       items: [
         {
-          feature: 'Undo and redo reliability.',
-          desc: 'The undo engine captures edits at word boundaries and toolbar actions, preserving history across view mode changes.',
+          feature: 'Accurate markdown line numbers.',
+          desc: 'Fixed an issue where code blocks and math formulas caused preview line numbers to drift out of sync.',
         },
         {
-          feature: 'Shortcut conflict resolution.',
-          desc: 'Pressing undo shortcuts inside search bars or rename inputs no longer modifies the document in the background.',
+          feature: 'Smart quote backspace correction.',
+          desc: 'Pressing Backspace between smart double quotes now converts them back to standard double quotes.',
         },
         {
-          feature: 'Offline math rendering.',
-          desc: 'Standalone HTML and PDF exports include local KaTeX styling so equations render properly without an internet connection.',
+          feature: 'Fixed reader text selection.',
+          desc: 'Highlighting text in the reader view no longer drops the selection when the action popup appears.',
         },
         {
-          feature: 'Diagram zoom and fit.',
-          desc: 'Expanded diagrams measure intrinsic dimensions on open to fill the screen cleanly without oversized margins.',
+          feature: 'Contained indented code scrolling.',
+          desc: 'Indented code lines and tabbed text now scroll within their own box instead of widening the whole page.',
         },
         {
-          feature: 'Storage recovery.',
-          desc: 'The app detects corrupted local storage on startup and resets safely to sample notes instead of crashing on a blank screen.',
+          feature: 'Reliable internal document links.',
+          desc: 'Clicking in-page links now scrolls smoothly to target sections without jumping the layout.',
         },
         {
-          feature: 'Markdown-aware readability analysis.',
-          desc: 'Readability scores no longer need periods on lists, tasks, headings, or table rows.',
+          feature: 'Consistent typing sounds.',
+          desc: 'Typewriter keystroke audio now plays reliably on mobile devices and during rapid typing.',
+        },
+        {
+          feature: 'Standardized hook paths.',
+          desc: 'Reorganized internal focus trap modules to follow project conventions while preserving legacy import compatibility.',
+        },
+      ],
+    },
+    {
+      title: 'Security & Reliability',
+      badge: '🔐',
+      icon: <Shield className="w-4 h-4 text-blue-500 shrink-0" />,
+      colorClass: 'border-blue-500/20 bg-blue-500/5',
+      items: [
+        {
+          feature: 'Automatic storage management.',
+          desc: 'Scroll position history is now pruned automatically to prevent browser storage limit errors.',
+        },
+        {
+          feature: 'Reliable text narration and audio cleanup.',
+          desc: 'Long-form text speech playback no longer stalls on long sections and cleans up memory when stopped.',
+        },
+        {
+          feature: 'Scroll loop protection.',
+          desc: 'Prevented split-pane scroll events from echoing back and forth between the editor and preview.',
+        },
+        {
+          feature: 'Modular state management.',
+          desc: 'Extracted core workspace logic into dedicated state hooks to eliminate stale closures and background update loops.',
+        },
+      ],
+    },
+    {
+      title: 'Breaking Changes & Migration',
+      badge: '⚠️',
+      icon: <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0" />,
+      colorClass: 'border-orange-500/20 bg-orange-500/5',
+      items: [
+        {
+          feature: 'Storage key migration.',
+          desc: 'The application now automatically imports notes stored across legacy keys and dual-writes to current and previous storage formats.',
+        },
+        {
+          feature: 'Centralized application defaults.',
+          desc: 'Internal configuration defaults now reference unified constants, standardizing settings handling across all modules.',
         },
       ],
     },
@@ -183,7 +239,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
               <div className="flex items-center gap-2">
                 <h2 className="font-bold text-lg tracking-tight">What&apos;s New in Lumina Prose</h2>
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold tracking-wide bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                  {version}
+                  v{version}
                 </span>
               </div>
               <p className="text-xs" style={{ color: theme.textMuted }}>

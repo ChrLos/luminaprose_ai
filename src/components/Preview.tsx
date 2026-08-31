@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useDeferredValue } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   ListTree, 
   X, 
@@ -6,13 +7,22 @@ import {
   Sparkles, 
   CheckCircle2, 
   ChevronRight, 
+  ChevronDown,
   Minus, 
   Plus,
   Volume2,
   Play,
   Pause,
   SkipForward,
-  SkipBack
+  SkipBack,
+  Info,
+  FileText,
+  Code,
+  Sigma,
+  Filter,
+  Layers,
+  Copy,
+  Check
 } from 'lucide-react';
 import { 
   ThemeConfig, 
@@ -20,14 +30,18 @@ import {
   ReadabilityMetrics, 
   TocHeading 
 } from '../types';
-import { parseMarkdownToHtml, extractHeadings, clearParseCache } from '../utils/markdownParser';
+import { parseMarkdownToHtml, extractHeadings, clearParseCache, slugify } from '../utils/markdownParser';
 import { calculateReadability } from '../utils/readability';
 import { applyBionicReading } from '../utils/bionicReader';
 import { DocumentNarrator, SpeechState } from '../utils/speechNarrator';
 import { renderMermaidInContainer, subscribeMermaidUpdates } from '../utils/mermaidRenderer';
+import { invalidateSyncScrollCache } from '../utils/syncScrollEngine';
+import { getDocScrollPosition, saveDocScrollPosition } from '../utils/scrollStore';
+import { getSelectionAsMarkdown } from '../utils/htmlToMarkdown';
 import { MermaidViewerModal } from './MermaidViewerModal';
 
 interface PreviewProps {
+  currentDocId?: string;
   markdown: string;
   onUpdateMarkdown: (newMarkdown: string) => void;
   theme: ThemeConfig;
@@ -37,9 +51,11 @@ interface PreviewProps {
   scrollRef?: React.RefObject<HTMLDivElement | null>;
   onScrollSync?: (scrollTop: number, scrollHeight: number, clientHeight: number) => void;
   onScrollDirectionChange?: (isVisible: boolean) => void;
+  onInteraction?: (scroller: 'editor' | 'preview') => void;
 }
 
 export const Preview: React.FC<PreviewProps> = React.memo(({
+  currentDocId,
   markdown,
   onUpdateMarkdown,
   theme,
@@ -49,15 +65,19 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
   scrollRef: externalScrollRef,
   onScrollSync,
   onScrollDirectionChange,
+  onInteraction,
 }) => {
   const localScrollRef = useRef<HTMLDivElement>(null);
   const containerRef = externalScrollRef || localScrollRef;
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const tocListRef = useRef<HTMLDivElement>(null);
   const outlineBtnRef = useRef<HTMLButtonElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const lastScrollTopRef = useRef<number>(0);
   const headingCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [showToc, setShowToc] = useState(false);
+  const [collapsedHeadings, setCollapsedHeadings] = useState<Set<string>>(new Set());
   const [isOutlineBtnVisible, setIsOutlineBtnVisible] = useState(true);
   const [isScrollHeaderVisible, setIsScrollHeaderVisible] = useState(true);
   const [activeHeadingId, setActiveHeadingId] = useState<string>('');
@@ -66,6 +86,245 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
   const [viewingMermaid, setViewingMermaid] = useState<{ rawCode: string; svgHtml: string } | null>(null);
   const [copiedCodeToast, setCopiedCodeToast] = useState<string | null>(null);
   const [guideY, setGuideY] = useState<number | null>(null);
+  const [showWordCountBreakdown, setShowWordCountBreakdown] = useState(false);
+  const wordCountModalRef = useRef<HTMLDivElement>(null);
+
+  // High-performance DOM-based Floating Selection Tooltip (0 React state updates during selection)
+  const selectionBubbleRef = useRef<HTMLDivElement | null>(null);
+  const selectedMarkdownRef = useRef<string>('');
+  const selectedWordCountRef = useRef<number>(0);
+
+  const hideSelectionBubble = useCallback(() => {
+    if (selectionBubbleRef.current) {
+      selectionBubbleRef.current.style.display = 'none';
+    }
+  }, []);
+
+  const updateSelectionDOM = useCallback(() => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      hideSelectionBubble();
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      hideSelectionBubble();
+      return;
+    }
+
+    const text = selection.toString();
+    if (!text || !text.trim()) {
+      hideSelectionBubble();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+
+    // Verify selection is within the preview container
+    const isInside =
+      container.contains(range.commonAncestorContainer) ||
+      container.contains(range.startContainer) ||
+      container.contains(range.endContainer);
+
+    if (!isInside) {
+      hideSelectionBubble();
+      return;
+    }
+
+    const rawMarkdown = getSelectionAsMarkdown(container);
+    if (!rawMarkdown || rawMarkdown.trim().length === 0) {
+      hideSelectionBubble();
+      return;
+    }
+
+    // Measure bounding client rect
+    const rects = range.getClientRects();
+    let rect: DOMRect | null = rects.length > 0 ? rects[0] : range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      rect = range.getBoundingClientRect();
+    }
+
+    if (!rect || (rect.top === 0 && rect.bottom === 0 && rect.left === 0 && rect.right === 0)) {
+      hideSelectionBubble();
+      return;
+    }
+
+    const clientX = (rect.left + rect.right) / 2;
+    const clientY = rect.top;
+
+    const clampedX = Math.max(120, Math.min(clientX, window.innerWidth - 120));
+    const isAbove = clientY >= 50;
+    const clampedY = isAbove ? clientY - 42 : rect.bottom + 8;
+    const wordCount = rawMarkdown.split(/\s+/).filter(Boolean).length;
+
+    selectedMarkdownRef.current = rawMarkdown;
+    selectedWordCountRef.current = wordCount;
+
+    // Create or update DOM bubble directly without triggering React re-renders
+    let bubble = selectionBubbleRef.current;
+    if (!bubble) {
+      bubble = document.createElement('div');
+      bubble.className = 'selection-toolbar-bubble no-print fixed z-[9999] select-none pointer-events-auto';
+      bubble.style.transform = 'translateX(-50%)';
+      bubble.style.transition = 'opacity 0.15s ease-out';
+      
+      // Prevent mousedown from stealing focus or collapsing the text selection
+      bubble.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+
+      document.body.appendChild(bubble);
+      selectionBubbleRef.current = bubble;
+    }
+
+    bubble.innerHTML = `
+      <div class="flex items-center gap-1.5 p-1 rounded-lg border shadow-2xl backdrop-blur-md text-xs font-sans"
+           style="background-color: ${theme.bgElevated}; border-color: ${theme.border}; color: ${theme.text};">
+        <button
+          type="button"
+          id="copy-selection-md-btn"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold text-xs transition-all cursor-pointer shadow-xs border text-white"
+          style="background-color: ${theme.accent}; border-color: ${theme.accent};"
+          title="Copy highlighted text formatted as Markdown (Ctrl+Shift+C)"
+        >
+          <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+            <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+          </svg>
+          <span>Copy as Markdown</span>
+        </button>
+        <div class="px-2 py-0.5 text-[11px] font-mono opacity-70 border-l" style="border-color: ${theme.border};">
+          ${wordCount} words
+        </div>
+      </div>
+    `;
+
+    const copyBtn = bubble.querySelector('#copy-selection-md-btn') as HTMLButtonElement;
+    if (copyBtn) {
+      copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const mdText = selectedMarkdownRef.current;
+        const count = selectedWordCountRef.current;
+        if (!mdText) return;
+
+        navigator.clipboard.writeText(mdText).then(() => {
+          copyBtn.style.backgroundColor = '#10B981';
+          copyBtn.style.borderColor = '#10B981';
+          copyBtn.innerHTML = `
+            <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Copied Markdown!</span>
+          `;
+          setCopiedCodeToast(`Copied ${count} words as Markdown`);
+          setTimeout(() => {
+            setCopiedCodeToast(null);
+            hideSelectionBubble();
+          }, 1500);
+        });
+      });
+    }
+
+    bubble.style.top = `${clampedY}px`;
+    bubble.style.left = `${clampedX}px`;
+    bubble.style.display = 'block';
+  }, [containerRef, theme, hideSelectionBubble]);
+
+  // Clean up selection bubble on unmount
+  useEffect(() => {
+    return () => {
+      if (selectionBubbleRef.current) {
+        selectionBubbleRef.current.remove();
+        selectionBubbleRef.current = null;
+      }
+    };
+  }, []);
+
+  // Event listeners for text selection
+  useEffect(() => {
+    const handleMouseUp = () => {
+      setTimeout(updateSelectionDOM, 30);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Shift'].includes(e.key)) {
+        setTimeout(updateSelectionDOM, 30);
+      }
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.selection-toolbar-bubble')) {
+        return;
+      }
+      hideSelectionBubble();
+    };
+
+    const handleContainerScroll = () => {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) {
+        updateSelectionDOM();
+      } else {
+        hideSelectionBubble();
+      }
+    };
+
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('mousedown', handleMouseDown);
+
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('scroll', handleContainerScroll, { passive: true });
+    }
+
+    return () => {
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('mousedown', handleMouseDown);
+      if (container) {
+        container.removeEventListener('scroll', handleContainerScroll);
+      }
+    };
+  }, [updateSelectionDOM, hideSelectionBubble, containerRef]);
+
+  // Keyboard shortcut: Ctrl/Cmd + Shift + C while selection is active in reader
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && containerRef.current) {
+          const md = getSelectionAsMarkdown(containerRef.current);
+          if (md && md.trim()) {
+            e.preventDefault();
+            navigator.clipboard.writeText(md).then(() => {
+              setCopiedCodeToast('Selection copied as Markdown');
+              setTimeout(() => setCopiedCodeToast(null), 2000);
+            });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [containerRef]);
+
+  // Close word count modal on click outside
+  useEffect(() => {
+    const handleWordCountOutsideClick = (e: MouseEvent) => {
+      if (wordCountModalRef.current && !wordCountModalRef.current.contains(e.target as Node)) {
+        setShowWordCountBreakdown(false);
+      }
+    };
+    if (showWordCountBreakdown) {
+      document.addEventListener('mousedown', handleWordCountOutsideClick);
+      return () => document.removeEventListener('mousedown', handleWordCountOutsideClick);
+    }
+  }, [showWordCountBreakdown]);
 
   // Audio Narrator State
   const [showNarrator, setShowNarrator] = useState(false);
@@ -89,7 +348,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
     });
 
     return () => {
-      narratorRef.current?.stop();
+      narratorRef.current?.destroy();
     };
   }, []);
 
@@ -127,6 +386,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
   useEffect(() => {
     return subscribeMermaidUpdates(() => {
       clearParseCache();
+      invalidateSyncScrollCache();
       setMermaidVersion((v) => v + 1);
     });
   }, []);
@@ -199,7 +459,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
       }
     };
 
-    // 4. Task Item Checkbox Handler (Indexed for 100% formatting and duplicate resilience)
+    // 4. Task Item Checkbox Handler (Indexed for 100% formatting, loose lists, and duplicate resilience)
     (window as any).__toggleTaskItem = (checkbox: HTMLInputElement) => {
       const taskIdxStr = checkbox.getAttribute('data-task-index');
       if (taskIdxStr === null) return;
@@ -212,7 +472,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
       let updated = false;
 
       const newLines = lines.map((line) => {
-        const match = line.match(/^(\s*[-*+]\s+)\[([ xX])\](\s+.*)$/);
+        const match = line.match(/^(\s*(?:[-*+]|\d+\.)\s+)\[([ xX])\](\s+.*)$/);
         if (match) {
           if (currentTaskCount === targetIdx && !updated) {
             updated = true;
@@ -237,6 +497,53 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
     };
   }, [markdown, onUpdateMarkdown]);
 
+  // Flag to suppress saving scroll during document switching / restoration
+  const isRestoringScrollRef = useRef(false);
+
+  // Restore persistent scroll position per document ID
+  useEffect(() => {
+    if (!currentDocId) return;
+    const saved = getDocScrollPosition(currentDocId);
+    const targetScroll = saved.previewScrollTop;
+    const container = containerRef.current;
+
+    isRestoringScrollRef.current = true;
+
+    if (container) {
+      container.scrollTop = targetScroll;
+      lastScrollTopRef.current = targetScroll;
+    }
+
+    // Schedule across multiple animation frames & timeout ticks to ensure markdown/katex/mermaid DOM rendered
+    const r1 = requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      }
+    });
+
+    const t1 = setTimeout(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      }
+    }, 60);
+
+    const t2 = setTimeout(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = targetScroll;
+        lastScrollTopRef.current = targetScroll;
+      }
+      isRestoringScrollRef.current = false;
+    }, 150);
+
+    return () => {
+      cancelAnimationFrame(r1);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [currentDocId]);
+
   // Keyboard accessibility: Escape key to dismiss image zoom lightbox
   useEffect(() => {
     if (!zoomedImage) return;
@@ -257,6 +564,11 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     
+    // Persist per-document scroll (only when not in the middle of restoring)
+    if (currentDocId && !isRestoringScrollRef.current) {
+      saveDocScrollPosition(currentDocId, { previewScrollTop: scrollTop });
+    }
+
     // Direct DOM progress calculation (0 React re-renders)
     const maxScroll = scrollHeight - clientHeight;
     const progress = maxScroll > 0 ? Math.min(100, Math.max(0, (scrollTop / maxScroll) * 100)) : 0;
@@ -358,14 +670,14 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
 
   // Mouse move for reading guide ruler (RAF Throttled)
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!settings.readingGuide || !containerRef.current) return;
+    if (!settings.readingGuide || !wrapperRef.current) return;
     const clientY = e.clientY;
     if (mouseRafRef.current) return;
 
     mouseRafRef.current = requestAnimationFrame(() => {
       mouseRafRef.current = null;
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
+      if (wrapperRef.current) {
+        const rect = wrapperRef.current.getBoundingClientRect();
         setGuideY(clientY - rect.top);
       }
     });
@@ -374,6 +686,185 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
   const handleMouseLeave = () => {
     setGuideY(null);
   };
+
+  // Handle internal anchor links (e.g. <a href="#image-restoration">, footnotes, or <a name="...">)
+  const handleArticleClick = (e: React.MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    const anchor = target.closest('a');
+    if (!anchor) return;
+
+    const rawHref = anchor.getAttribute('href');
+    if (rawHref && rawHref.startsWith('#')) {
+      e.preventDefault();
+      const targetRef = rawHref.substring(1).trim();
+      if (!targetRef) return;
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      onInteraction?.('preview');
+
+      // Try multiple resolution strategies:
+      // 1. Direct document.getElementById / container query
+      let targetEl: HTMLElement | null = null;
+
+      try {
+        targetEl = document.getElementById(targetRef) ||
+          container.querySelector(`[id="${CSS.escape(targetRef)}"]`) ||
+          container.querySelector(`[name="${CSS.escape(targetRef)}"]`) ||
+          container.querySelector(`a[name="${CSS.escape(targetRef)}"]`) ||
+          container.querySelector(`a[id="${CSS.escape(targetRef)}"]`);
+      } catch {
+        targetEl = document.getElementById(targetRef);
+      }
+
+      // 2. Slugified match (e.g. if link is href="#Image-Restoration" and target is id="image-restoration" or heading slug)
+      if (!targetEl) {
+        const slug = slugify(targetRef);
+        if (slug) {
+          try {
+            targetEl = document.getElementById(slug) ||
+              container.querySelector(`[id="${CSS.escape(slug)}"]`) ||
+              container.querySelector(`[name="${CSS.escape(slug)}"]`) ||
+              container.querySelector(`a[name="${CSS.escape(slug)}"]`);
+          } catch {
+            targetEl = document.getElementById(slug);
+          }
+        }
+      }
+
+      // 3. Case-insensitive attribute search
+      if (!targetEl) {
+        const lowerRef = targetRef.toLowerCase();
+        const allTagged = Array.from(container.querySelectorAll<HTMLElement>('[id], [name], a[name], a[id]'));
+        for (const el of allTagged) {
+          const elId = el.getAttribute('id')?.toLowerCase();
+          const elName = el.getAttribute('name')?.toLowerCase();
+          if (elId === lowerRef || elName === lowerRef || (elId && slugify(elId) === lowerRef)) {
+            targetEl = el;
+            break;
+          }
+        }
+      }
+
+      if (targetEl) {
+        // Calculate exact scroll offset relative to preview container
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = targetEl.getBoundingClientRect();
+        const targetScrollTop = container.scrollTop + (targetRect.top - containerRect.top) - 24;
+
+        container.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: 'smooth',
+        });
+
+        // Add a brief subtle flash to draw eye to reference target
+        targetEl.classList.add('anchor-target-highlight');
+        setTimeout(() => {
+          targetEl?.classList.remove('anchor-target-highlight');
+        }, 1500);
+      }
+    }
+  };
+
+  // Toggle collapsible heading in outline
+  const toggleCollapseHeading = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCollapsedHeadings((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Synchronize outline position and expand active section when opening TOC
+  useEffect(() => {
+    if (showToc && containerRef.current) {
+      const previewContainerRect = containerRef.current.getBoundingClientRect();
+      const headingElements = headings
+        .map((h) => ({ id: h.id, level: h.level, el: document.getElementById(h.id) }))
+        .filter((item): item is { id: string; level: number; el: HTMLElement } => Boolean(item.el));
+
+      let currentActive = headings[0]?.id;
+      for (let i = headingElements.length - 1; i >= 0; i--) {
+        const rect = headingElements[i].el.getBoundingClientRect();
+        if (rect.top <= previewContainerRect.top + 120) {
+          currentActive = headingElements[i].id;
+          break;
+        }
+      }
+
+      if (currentActive) {
+        setActiveHeadingId(currentActive);
+        // Ensure its ancestors are uncollapsed so the active item is visible
+        setCollapsedHeadings((prev) => {
+          if (prev.size === 0) return prev;
+          const next = new Set(prev);
+          const activeIdx = headings.findIndex((h) => h.id === currentActive);
+          if (activeIdx > 0) {
+            const activeLevel = headings[activeIdx].level;
+            for (let i = activeIdx - 1; i >= 0; i--) {
+              if (headings[i].level < activeLevel) {
+                next.delete(headings[i].id);
+              }
+            }
+          }
+          return next;
+        });
+
+        setTimeout(() => {
+          const el = tocListRef.current?.querySelector(`[data-toc-id="${currentActive}"]`);
+          if (el) {
+            el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+        }, 50);
+      }
+    }
+  }, [showToc, headings, containerRef]);
+
+  // Compute visible headings considering collapsed ancestor branches
+  const visibleHeadings = useMemo(() => {
+    const result: { heading: TocHeading; hasChildren: boolean; isCollapsed: boolean }[] = [];
+    
+    // First, precalculate which headings have child subheadings
+    const hasChildrenMap = new Map<string, boolean>();
+    for (let i = 0; i < headings.length; i++) {
+      const curr = headings[i];
+      const next = headings[i + 1];
+      hasChildrenMap.set(curr.id, Boolean(next && next.level > curr.level));
+    }
+
+    // Determine visibility based on collapsed parent branches
+    let hiddenUnderLevel: number | null = null;
+
+    for (let i = 0; i < headings.length; i++) {
+      const h = headings[i];
+      const hasChildren = hasChildrenMap.get(h.id) || false;
+      const isCollapsed = collapsedHeadings.has(h.id);
+
+      if (hiddenUnderLevel !== null) {
+        if (h.level > hiddenUnderLevel) {
+          // Skip rendering this collapsed child
+          continue;
+        } else {
+          // Reset hidden level once we encounter a peer or higher level
+          hiddenUnderLevel = null;
+        }
+      }
+
+      result.push({ heading: h, hasChildren, isCollapsed });
+
+      if (hasChildren && isCollapsed) {
+        hiddenUnderLevel = h.level;
+      }
+    }
+
+    return result;
+  }, [headings, collapsedHeadings]);
 
   // Quick font size increments
   const handleAdjustFontSize = (delta: number) => {
@@ -399,6 +890,7 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
 
   return (
     <div 
+      ref={wrapperRef}
       data-theme-category={theme.category}
       className={`relative flex h-full overflow-hidden flex-1 select-text transition-colors ${
         theme.category === 'dark' ? 'theme-dark' : 'theme-light'
@@ -416,6 +908,19 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
             backgroundColor: `rgba(249, 115, 22, ${warmthAlpha})`,
             mixBlendMode: theme.category === 'dark' ? 'screen' : 'multiply',
           }}
+        />
+      )}
+
+      {/* Subtle Reading Guide Ruler in fixed viewport coordinate space */}
+      {settings.readingGuide && guideY !== null && (
+        <div 
+          className="pointer-events-none absolute left-0 right-0 h-8 -translate-y-1/2 transition-transform duration-75 z-20 opacity-25"
+          style={{ 
+            top: `${guideY}px`,
+            backgroundColor: theme.accent,
+            borderTop: `1px dashed ${theme.accent}`,
+            borderBottom: `1px dashed ${theme.accent}`,
+          }} 
         />
       )}
 
@@ -468,25 +973,17 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
         onScroll={handleScroll}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
+        onPointerEnter={() => onInteraction?.('preview')}
+        onPointerDown={() => onInteraction?.('preview')}
+        onTouchStart={() => onInteraction?.('preview')}
+        onWheel={() => onInteraction?.('preview')}
         style={{ willChange: 'scroll-position' }}
         className="preview-container relative flex-1 h-full overflow-y-auto px-6 sm:px-10 lg:px-16 py-8 lg:py-14"
       >
-        {/* Subtle Reading Guide Ruler */}
-        {settings.readingGuide && guideY !== null && (
-          <div 
-            className="pointer-events-none absolute left-0 right-0 h-8 -translate-y-1/2 transition-transform duration-75 z-10 opacity-25"
-            style={{ 
-              top: `${guideY}px`,
-              backgroundColor: theme.accent,
-              borderTop: `1px dashed ${theme.accent}`,
-              borderBottom: `1px dashed ${theme.accent}`,
-            }} 
-          />
-        )}
-
         {/* Reading Article Envelope */}
         <article 
-          className={`mx-auto transition-all ${
+          onClick={handleArticleClick}
+          className={`mx-auto w-full min-w-0 max-w-full transition-all ${
             settings.dropCaps ? 'drop-cap' : ''
           } ${
             settings.paragraphSpacing === 'indented' ? 'book-indent' : ''
@@ -513,15 +1010,139 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
         >
           {/* Quick Reading Comfort & Metrics Ribbon */}
           <div 
-            className="no-print mb-8 pb-3.5 border-b flex flex-wrap items-center justify-between text-xs font-sans gap-3 select-none"
+            className="no-print mb-8 pb-3.5 border-b flex flex-wrap items-center justify-between text-xs font-sans gap-3 select-none relative"
             style={{ borderColor: theme.border, color: theme.textMuted }}
           >
-            {/* Left: Reading stats */}
+            {/* Left: Reading stats with Dual Word Count Popover Trigger */}
             <div className="flex items-center gap-3.5 flex-wrap">
-              <span className="flex items-center gap-1.5 font-medium" title="Estimated Reading Time">
-                <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                <span>{readability.readingTimeMinutes} min read ({readability.words.toLocaleString()} words)</span>
-              </span>
+              {/* Dual Word Count Badge & Breakdown Button */}
+              <div className="relative" ref={wordCountModalRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowWordCountBreakdown((prev) => !prev)}
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border transition-all cursor-pointer font-medium ${
+                    showWordCountBreakdown 
+                      ? 'ring-1.5 ring-amber-500 shadow-xs' 
+                      : 'hover:border-amber-500/50'
+                  }`}
+                  style={{
+                    borderColor: showWordCountBreakdown ? theme.accent : theme.border,
+                    backgroundColor: showWordCountBreakdown ? theme.bgElevated : 'transparent',
+                    color: theme.text,
+                  }}
+                  title="Click to view Word Count Calculation & Omission Breakdown"
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>{readability.readingTimeMinutes} min read</span>
+                  <span className="opacity-30">•</span>
+                  <span className="font-semibold">{readability.words.toLocaleString()} words</span>
+                  <span className="text-[10px] opacity-60">({readability.rawWords.toLocaleString()} raw)</span>
+                  <Info className="w-3 h-3 opacity-50 ml-0.5" />
+                </button>
+
+                {/* Word Count Breakdown Popover */}
+                {showWordCountBreakdown && (
+                  <div 
+                    className="absolute left-0 top-full mt-2 w-80 sm:w-96 rounded-2xl shadow-2xl border p-4 z-50 text-xs animate-in fade-in zoom-in-95 duration-150"
+                    style={{
+                      backgroundColor: theme.bgElevated,
+                      borderColor: theme.border,
+                      color: theme.text,
+                    }}
+                  >
+                    <div className="flex items-center justify-between border-b pb-2.5 mb-3" style={{ borderColor: theme.border }}>
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        <span className="font-semibold text-sm">Word Count & Content Analysis</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowWordCountBreakdown(false)}
+                        className="p-1 rounded hover:bg-stone-500/10 cursor-pointer"
+                        style={{ color: theme.textMuted }}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {/* Metric Comparison Cards */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div 
+                          className="p-2.5 rounded-xl border flex flex-col gap-1"
+                          style={{ borderColor: theme.accent, backgroundColor: theme.bg }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                              <Filter className="w-3 h-3" /> Filtered Prose
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 font-medium">Reading</span>
+                          </div>
+                          <div className="text-xl font-bold font-mono">{readability.words.toLocaleString()}</div>
+                          <span className="text-[10px] opacity-70 leading-tight">
+                            Excludes code, math, syntax markup & link URLs.
+                          </span>
+                        </div>
+
+                        <div 
+                          className="p-2.5 rounded-xl border flex flex-col gap-1"
+                          style={{ borderColor: theme.border, backgroundColor: theme.bgSecondary }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-medium opacity-80 flex items-center gap-1">
+                              <FileText className="w-3 h-3" /> Full Context
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-stone-500/10 opacity-70 font-mono">Raw</span>
+                          </div>
+                          <div className="text-xl font-bold font-mono">{readability.rawWords.toLocaleString()}</div>
+                          <span className="text-[10px] opacity-70 leading-tight">
+                            All words and tokens across raw Markdown.
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* What is Omitted Section */}
+                      <div className="p-2.5 rounded-xl border text-[11px] space-y-1.5" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
+                        <div className="font-semibold text-[11px] flex items-center justify-between">
+                          <span>Omitted from Prose Word Count:</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">
+                            {readability.omittedWords.toLocaleString()} words
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] opacity-80 pt-1 border-t" style={{ borderColor: theme.border }}>
+                          <div className="flex items-center gap-1">
+                            <Code className="w-3 h-3 shrink-0" />
+                            <span>Code blocks: <strong>{readability.codeBlocksCount}</strong></span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Sigma className="w-3 h-3 shrink-0" />
+                            <span>Math blocks: <strong>{readability.mathBlocksCount}</strong></span>
+                          </div>
+                          <div className="col-span-2 text-[10px] opacity-70 pt-0.5">
+                            • Also omitted: Inline code, HTML tags, link target URLs, YAML headers &amp; Markdown symbols (#, **, &gt;, ---).
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Document Details Grid */}
+                      <div className="grid grid-cols-3 gap-2 text-center text-[10px] pt-1">
+                        <div className="p-1.5 rounded-lg border" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
+                          <div className="font-bold font-mono text-xs">{readability.characters.toLocaleString()}</div>
+                          <div className="opacity-60">Total Chars</div>
+                        </div>
+                        <div className="p-1.5 rounded-lg border" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
+                          <div className="font-bold font-mono text-xs">{readability.paragraphs}</div>
+                          <div className="opacity-60">Paragraphs</div>
+                        </div>
+                        <div className="p-1.5 rounded-lg border" style={{ borderColor: theme.border, backgroundColor: theme.bg }}>
+                          <div className="font-bold font-mono text-xs">{readability.lines}</div>
+                          <div className="opacity-60">Lines</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <span className="hidden sm:inline opacity-30">•</span>
 
@@ -801,20 +1422,20 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-1 text-xs font-sans">
+          <div ref={tocListRef} className="flex-1 overflow-y-auto p-3 space-y-1 text-xs font-sans">
             {headings.length === 0 ? (
               <div className="text-center py-8 opacity-60">
                 No headings found in markdown. Use # or ## to create outline items.
               </div>
             ) : (
-              headings.map((h) => {
+              visibleHeadings.map(({ heading: h, hasChildren, isCollapsed }) => {
                 const isActive = activeHeadingId === h.id;
-                const indentPx = (h.level - 1) * 16 + 12;
+                const indentPx = (h.level - 1) * 12 + 6;
                 
                 return (
-                  <button
+                  <div
                     key={h.id}
-                    type="button"
+                    data-toc-id={h.id}
                     onClick={() => scrollToHeading(h.id)}
                     style={{ 
                       paddingLeft: `${indentPx}px`,
@@ -822,15 +1443,30 @@ export const Preview: React.FC<PreviewProps> = React.memo(({
                         ? (theme.category === 'dark' ? '#ffffff' : '#000000') 
                         : theme.text,
                     }}
-                    className={`w-full text-left py-1.5 pr-2.5 rounded-md transition-all flex items-center justify-between group cursor-pointer border-l-2 ${
+                    className={`w-full text-left py-1.5 pr-2.5 rounded-md transition-all flex items-center gap-1 group cursor-pointer border-l-2 ${
                       isActive 
                         ? 'bg-amber-500/20 border-amber-600 font-bold shadow-2xs' 
-                        : 'border-transparent hover:bg-stone-500/10 opacity-75 hover:opacity-100'
+                        : 'border-transparent hover:bg-stone-500/10 opacity-80 hover:opacity-100'
                     }`}
                   >
-                    <span className={`truncate text-xs ${h.level === 1 ? 'font-bold' : ''}`}>{h.text}</span>
-                    <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-opacity ${isActive ? 'opacity-100 text-amber-700 dark:text-amber-400' : 'opacity-0 group-hover:opacity-60'}`} />
-                  </button>
+                    {hasChildren ? (
+                      <button
+                        type="button"
+                        onClick={(e) => toggleCollapseHeading(h.id, e)}
+                        className="p-0.5 rounded hover:bg-stone-500/20 transition-colors cursor-pointer shrink-0"
+                        title={isCollapsed ? "Expand section" : "Collapse section"}
+                      >
+                        {isCollapsed ? (
+                          <ChevronRight className="w-3.5 h-3.5 opacity-70 group-hover:opacity-100" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5 opacity-70 group-hover:opacity-100" />
+                        )}
+                      </button>
+                    ) : (
+                      <span className="w-4.5 shrink-0 inline-block" />
+                    )}
+                    <span className={`truncate flex-1 text-xs ${h.level === 1 ? 'font-bold' : ''}`}>{h.text}</span>
+                  </div>
                 );
               })
             )}

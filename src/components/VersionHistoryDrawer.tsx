@@ -1,167 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   History,
   X,
   Plus,
   RotateCcw,
   Trash2,
-  FileText,
   Clock,
-  Sparkles,
   Check,
   Eye,
   FileCode,
-  AlertCircle,
   Info,
+  Columns,
 } from 'lucide-react';
-import { DocumentItem, ThemeConfig } from '../types';
+import { DocumentItem, ThemeConfig, DocumentSnapshot, DiffLine, DiffDisplayItem } from '../types';
 import { VirtualList } from './VirtualList';
 import { useFocusTrap } from '../utils/useFocusTrap';
-
-export interface DocumentSnapshot {
-  id: string;
-  docId: string;
-  timestamp: number;
-  title: string;
-  content: string;
-  type: 'manual' | 'auto';
-  label?: string;
-  wordCount: number;
-}
+import { DiffModal } from './DiffModal';
+import { computeLineDiff } from '../utils/diffEngine';
+import { getContrastingTextColor } from '../utils/colorUtils';
 
 const SNAPSHOTS_STORAGE_KEY = 'lumina_markdown_snapshots_v1';
-
-export interface DiffLine {
-  type: 'added' | 'removed' | 'unchanged';
-  line: string;
-  oldLineNum?: number;
-  newLineNum?: number;
-}
-
-export type DiffDisplayItem =
-  | { type: 'line'; data: DiffLine; index: number }
-  | { type: 'fold'; count: number; startIdx: number; endIdx: number; id: string };
-
-// LCS Line Diff Algorithm
-const computeLineDiff = (oldText: string, newText: string): DiffLine[] => {
-  const oldLines = oldText.split('\n');
-  const newLines = newText.split('\n');
-
-  const N = oldLines.length;
-  const M = newLines.length;
-
-  let prefix = 0;
-  while (prefix < N && prefix < M && oldLines[prefix] === newLines[prefix]) {
-    prefix++;
-  }
-
-  let suffix = 0;
-  while (
-    suffix < N - prefix &&
-    suffix < M - prefix &&
-    oldLines[N - 1 - suffix] === newLines[M - 1 - suffix]
-  ) {
-    suffix++;
-  }
-
-  const trimmedOld = oldLines.slice(prefix, N - suffix);
-  const trimmedNew = newLines.slice(prefix, M - suffix);
-
-  const tN = trimmedOld.length;
-  const tM = trimmedNew.length;
-
-  const middleDiff: DiffLine[] = [];
-
-  if (tN * tM < 1000000) {
-    const dp: number[][] = Array.from({ length: tN + 1 }, () => new Uint32Array(tM + 1) as any);
-
-    for (let i = tN - 1; i >= 0; i--) {
-      for (let j = tM - 1; j >= 0; j--) {
-        if (trimmedOld[i] === trimmedNew[j]) {
-          dp[i][j] = dp[i + 1][j + 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-        }
-      }
-    }
-
-    let i = 0;
-    let j = 0;
-    let oldNum = prefix + 1;
-    let newNum = prefix + 1;
-
-    while (i < tN || j < tM) {
-      if (i < tN && j < tM && trimmedOld[i] === trimmedNew[j]) {
-        middleDiff.push({
-          type: 'unchanged',
-          line: trimmedOld[i],
-          oldLineNum: oldNum++,
-          newLineNum: newNum++,
-        });
-        i++;
-        j++;
-      } else if (j < tM && (i === tN || dp[i][j + 1] >= dp[i + 1][j])) {
-        middleDiff.push({
-          type: 'added',
-          line: trimmedNew[j],
-          newLineNum: newNum++,
-        });
-        j++;
-      } else {
-        middleDiff.push({
-          type: 'removed',
-          line: trimmedOld[i],
-          oldLineNum: oldNum++,
-        });
-        i++;
-      }
-    }
-  } else {
-    let i = 0;
-    let j = 0;
-    let oldNum = prefix + 1;
-    let newNum = prefix + 1;
-
-    while (i < tN || j < tM) {
-      if (i < tN && j < tM && trimmedOld[i] === trimmedNew[j]) {
-        middleDiff.push({ type: 'unchanged', line: trimmedOld[i], oldLineNum: oldNum++, newLineNum: newNum++ });
-        i++; j++;
-      } else if (j < tM && (!trimmedOld[i] || !trimmedOld.includes(trimmedNew[j]))) {
-        middleDiff.push({ type: 'added', line: trimmedNew[j], newLineNum: newNum++ });
-        j++;
-      } else {
-        middleDiff.push({ type: 'removed', line: trimmedOld[i], oldLineNum: oldNum++ });
-        i++;
-      }
-    }
-  }
-
-  const result: DiffLine[] = [];
-
-  for (let p = 0; p < prefix; p++) {
-    result.push({
-      type: 'unchanged',
-      line: oldLines[p],
-      oldLineNum: p + 1,
-      newLineNum: p + 1,
-    });
-  }
-
-  result.push(...middleDiff);
-
-  const suffixOldStart = N - suffix;
-  const suffixNewStart = M - suffix;
-  for (let s = 0; s < suffix; s++) {
-    result.push({
-      type: 'unchanged',
-      line: oldLines[suffixOldStart + s],
-      oldLineNum: suffixOldStart + s + 1,
-      newLineNum: suffixNewStart + s + 1,
-    });
-  }
-
-  return result;
-};
 
 // Fold helper with 5 lines context before/after
 const getFoldedDiffItems = (
@@ -235,18 +93,6 @@ const getFoldedDiffItems = (
   return items;
 };
 
-// Calculate high contrast text color (black or white) for any accent background
-const getContrastingTextColor = (hexColor: string) => {
-  if (!hexColor) return '#ffffff';
-  const hex = hexColor.replace('#', '');
-  if (hex.length !== 6) return '#ffffff';
-  const r = parseInt(hex.substring(0, 2), 16);
-  const g = parseInt(hex.substring(2, 4), 16);
-  const b = parseInt(hex.substring(4, 6), 16);
-  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-  return brightness > 150 ? '#000000' : '#ffffff';
-};
-
 export interface VersionHistoryDrawerProps {
   isOpen: boolean;
   onClose: () => void;
@@ -278,6 +124,7 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
   const [showDiffView, setShowDiffView] = useState(true);
   const [restoreSuccess, setRestoreSuccess] = useState(false);
   const [expandedFolds, setExpandedFolds] = useState<Record<string, boolean>>({});
+  const [isDiffModalOpen, setIsDiffModalOpen] = useState(false);
 
   const drawerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
 
@@ -293,7 +140,7 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
     setExpandedFolds({});
   }, [selectedSnapshotId]);
 
-  // Auto-Snapshot trigger: create an auto snapshot if no snapshot exists for current doc or last snapshot is older than 5 mins
+  // Auto-Snapshot trigger: create an auto snapshot if no snapshot exists for current doc or last snapshot is older than 3 mins
   useEffect(() => {
     if (!currentDoc || !currentDoc.content) return;
 
@@ -301,7 +148,6 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
     const lastSnapshot = docSnapshots[0]; // newest first
     const now = Date.now();
 
-    // Create auto-snapshot if last snapshot is > 3 minutes old and content changed
     if (!lastSnapshot || (now - lastSnapshot.timestamp > 180000 && lastSnapshot.content !== currentDoc.content)) {
       const words = currentDoc.content.trim().split(/\s+/).filter(Boolean).length;
       const autoSnap: DocumentSnapshot = {
@@ -316,7 +162,6 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
       };
 
       setSnapshots((prev) => {
-        // Keep max 20 auto-snapshots per doc
         const filtered = prev.filter((s) => s.docId !== currentDoc.id || s.type === 'manual');
         const autoDocs = prev.filter((s) => s.docId === currentDoc.id && s.type === 'auto');
         const trimmedAuto = autoDocs.slice(0, 15);
@@ -326,11 +171,15 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
   }, [currentDoc.id, currentDoc.content, currentDoc.title]);
 
   // Filter snapshots for active document
-  const currentDocSnapshots = snapshots
-    .filter((s) => s.docId === currentDoc.id)
-    .sort((a, b) => b.timestamp - a.timestamp);
+  const currentDocSnapshots = useMemo(() => {
+    return snapshots
+      .filter((s) => s.docId === currentDoc.id)
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [snapshots, currentDoc.id]);
 
-  const selectedSnapshot = currentDocSnapshots.find((s) => s.id === selectedSnapshotId) || currentDocSnapshots[0];
+  const selectedSnapshot = useMemo(() => {
+    return currentDocSnapshots.find((s) => s.id === selectedSnapshotId) || currentDocSnapshots[0];
+  }, [currentDocSnapshots, selectedSnapshotId]);
 
   // Create Manual Snapshot
   const handleCreateManualSnapshot = () => {
@@ -387,11 +236,16 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
   };
 
   // Compute LCS Line Diff
-  const lineDiff = selectedSnapshot
-    ? computeLineDiff(currentDoc.content, selectedSnapshot.content)
-    : [];
+  const lineDiff = useMemo(() => {
+    return selectedSnapshot
+      ? computeLineDiff(currentDoc.content, selectedSnapshot.content)
+      : [];
+  }, [selectedSnapshot, currentDoc.content]);
 
-  const foldedDiffItems = getFoldedDiffItems(lineDiff, expandedFolds, 5);
+  const foldedDiffItems = useMemo(() => {
+    return getFoldedDiffItems(lineDiff, expandedFolds, 5);
+  }, [lineDiff, expandedFolds]);
+
   const autoSnapshotsCount = currentDocSnapshots.filter((s) => s.type === 'auto').length;
 
   if (!isOpen) return null;
@@ -727,7 +581,7 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
                   )}
                 </div>
 
-                {/* Restore Footer Action */}
+                {/* Restore & Compare Footer Action */}
                 <div
                   className="p-3 border-t shrink-0 flex flex-col gap-2"
                   style={{ borderColor: theme.border, backgroundColor: theme.bg }}
@@ -738,15 +592,28 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
                       <span>Revision restored successfully!</span>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={handleRestore}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg font-bold text-xs shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
-                      style={{ backgroundColor: theme.accent, color: accentTextColor }}
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Restore This Revision</span>
-                    </button>
+                    <div className="flex items-center gap-2 w-full">
+                      <button
+                        type="button"
+                        onClick={handleRestore}
+                        className="flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg font-bold text-xs shadow-xs hover:opacity-90 transition-opacity cursor-pointer truncate"
+                        style={{ backgroundColor: theme.accent, color: accentTextColor }}
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">Restore This Version</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsDiffModalOpen(true)}
+                        className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg font-semibold text-xs border hover:bg-stone-500/10 transition-colors cursor-pointer shrink-0 shadow-2xs"
+                        style={{ borderColor: theme.border, color: theme.text, backgroundColor: theme.bgElevated }}
+                        title="Open Side-by-Side Comparison Modal"
+                      >
+                        <Columns className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        <span>Compare</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </>
@@ -759,6 +626,22 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Side-by-Side Fullscreen Diff Modal */}
+      {selectedSnapshot && (
+        <DiffModal
+          isOpen={isDiffModalOpen}
+          onClose={() => setIsDiffModalOpen(false)}
+          currentDoc={currentDoc}
+          snapshot={selectedSnapshot}
+          onRestore={(content) => {
+            onRestoreContent(content);
+            setRestoreSuccess(true);
+            setTimeout(() => setRestoreSuccess(false), 2500);
+          }}
+          theme={theme}
+        />
+      )}
     </div>
   );
 };

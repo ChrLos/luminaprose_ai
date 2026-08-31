@@ -107,7 +107,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
 
   return (
     <div 
-      className="absolute top-2 right-4 z-40 p-2.5 rounded-xl border shadow-2xl flex flex-col gap-2 transition-all select-none animate-in fade-in slide-in-from-top-2 duration-150 max-w-md w-[calc(100%-2rem)] sm:w-96 text-xs"
+      className="absolute top-2 right-2 sm:right-4 z-40 p-2 sm:p-2.5 rounded-xl border shadow-2xl flex flex-col gap-2 transition-all select-none animate-in fade-in slide-in-from-top-2 duration-150 max-w-[calc(100%-1rem)] sm:max-w-md w-full sm:w-96 text-xs overflow-hidden"
       style={{
         backgroundColor: theme.bgElevated,
         borderColor: theme.border,
@@ -115,12 +115,12 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
       }}
     >
       {/* Row 1: Find Input & Controls */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1 sm:gap-1.5 flex-nowrap w-full min-w-0">
         {/* Toggle Replace Expand */}
         <button
           type="button"
           onClick={onToggleShowReplace}
-          className={`p-1.5 rounded-md hover:bg-stone-500/10 transition-transform cursor-pointer ${
+          className={`p-1 sm:p-1.5 rounded-md hover:bg-stone-500/10 transition-transform cursor-pointer shrink-0 ${
             showReplace ? 'rotate-90 text-amber-600 dark:text-amber-400' : 'opacity-70'
           }`}
           title={showReplace ? 'Hide Replace' : 'Show Replace'}
@@ -130,7 +130,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
 
         {/* Find Input Field */}
         <div 
-          className="flex-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border focus-within:ring-1 focus-within:ring-amber-500"
+          className="flex-1 flex items-center gap-1 sm:gap-1.5 px-2 py-1 sm:py-1.5 rounded-lg border focus-within:ring-1 focus-within:ring-amber-500 min-w-0 overflow-hidden"
           style={{
             borderColor: theme.border,
             backgroundColor: theme.bgSecondary,
@@ -140,18 +140,18 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
           <input
             ref={findInputRef}
             type="text"
-            placeholder="Find in document..."
+            placeholder="Find..."
             value={findQuery}
             onChange={(e) => onFindQueryChange(e.target.value)}
             onKeyDown={handleKeyDownFind}
-            className="flex-1 bg-transparent border-none outline-hidden text-xs min-w-0"
+            className="flex-1 bg-transparent border-none outline-hidden text-xs min-w-0 w-full"
             style={{ color: theme.text }}
           />
 
           {/* Matches Counter */}
           {findQuery ? (
-            <span className="text-[10px] font-mono opacity-75 shrink-0 px-1">
-              {totalMatches > 0 ? `${currentMatchIndex} of ${totalMatches}` : '0 results'}
+            <span className="text-[10px] font-mono opacity-75 shrink-0 px-1 whitespace-nowrap truncate max-w-[80px]">
+              {totalMatches > 0 ? `${currentMatchIndex}/${totalMatches}` : '0 results'}
             </span>
           ) : null}
         </div>
@@ -160,7 +160,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
         <button
           type="button"
           onClick={onToggleMatchCase}
-          className={`p-1.5 rounded-md border transition-colors cursor-pointer ${
+          className={`p-1 sm:p-1.5 rounded-md border transition-colors cursor-pointer shrink-0 ${
             matchCase ? 'bg-amber-500/20 border-amber-500 text-amber-600 font-bold' : 'opacity-70 hover:opacity-100'
           }`}
           style={{ borderColor: matchCase ? theme.accent : theme.border }}
@@ -173,7 +173,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
         <button
           type="button"
           onClick={onToggleWholeWord}
-          className={`p-1.5 rounded-md border transition-colors cursor-pointer ${
+          className={`p-1 sm:p-1.5 rounded-md border transition-colors cursor-pointer shrink-0 ${
             matchWholeWord ? 'bg-amber-500/20 border-amber-500 text-amber-600 font-bold' : 'opacity-70 hover:opacity-100'
           }`}
           style={{ borderColor: matchWholeWord ? theme.accent : theme.border }}
@@ -187,7 +187,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
           type="button"
           onClick={onFindPrev}
           disabled={totalMatches === 0}
-          className="p-1.5 rounded-md border hover:bg-stone-500/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+          className="p-1 sm:p-1.5 rounded-md border hover:bg-stone-500/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
           style={{ borderColor: theme.border }}
           title="Previous Match (Shift+Enter)"
         >
@@ -198,7 +198,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
           type="button"
           onClick={onFindNext}
           disabled={totalMatches === 0}
-          className="p-1.5 rounded-md border hover:bg-stone-500/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+          className="p-1 sm:p-1.5 rounded-md border hover:bg-stone-500/10 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
           style={{ borderColor: theme.border }}
           title="Next Match (Enter)"
         >
@@ -209,7 +209,7 @@ export const FindReplaceBar: React.FC<FindReplaceBarProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="p-1.5 rounded-md hover:bg-stone-500/10 transition-colors cursor-pointer opacity-75 hover:opacity-100"
+          className="p-1 sm:p-1.5 rounded-md hover:bg-stone-500/10 transition-colors cursor-pointer opacity-75 hover:opacity-100 shrink-0"
           title="Close (Escape)"
         >
           <X className="w-3.5 h-3.5" />

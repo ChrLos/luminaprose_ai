@@ -65,8 +65,35 @@ export class DocumentNarrator {
     return voiceList.find((v) => v.default) || voiceList[0] || null;
   }
 
+  private keepAliveTimer: any = null;
+
+  private startKeepAlive() {
+    this.stopKeepAlive();
+    // Chromium bug workaround: speech synthesis can freeze or drop onend after ~15s
+    this.keepAliveTimer = setInterval(() => {
+      if (this.synth && this.synth.speaking && !this.synth.paused) {
+        this.synth.pause();
+        this.synth.resume();
+      }
+    }, 10000);
+  }
+
+  private stopKeepAlive() {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
+  }
+
   public setMarkdown(markdown: string) {
     this.stop();
+    if (!markdown || !markdown.trim()) {
+      this.sentences = [];
+      this.currentIndex = 0;
+      this.emitState();
+      return;
+    }
+
     // Clean markdown into clean spoken sentences
     const cleanText = markdown
       .replace(/```[\s\S]*?```/g, ' [Code block omitted] ')
@@ -83,14 +110,14 @@ export class DocumentNarrator {
     this.sentences = cleanText
       .split(/(?<=[.!?])\s+/)
       .map((s) => s.trim())
-      .filter((s) => s.length > 2);
+      .filter((s) => s.length > 1);
 
     this.currentIndex = 0;
     this.emitState();
   }
 
   public setRate(rate: number) {
-    this.rate = rate;
+    this.rate = Math.max(0.5, Math.min(2.5, rate));
     if (this.synth && this.synth.speaking && !this.synth.paused) {
       // Restart current sentence with new rate
       this.speakSentence(this.currentIndex);
@@ -104,6 +131,7 @@ export class DocumentNarrator {
 
     if (this.synth.paused) {
       this.synth.resume();
+      this.startKeepAlive();
       this.emitState();
       return;
     }
@@ -113,13 +141,18 @@ export class DocumentNarrator {
 
   public pause() {
     if (!this.synth) return;
+    this.stopKeepAlive();
     this.synth.pause();
     this.emitState();
   }
 
   public stop() {
-    if (!this.synth) return;
-    this.synth.cancel();
+    this.stopKeepAlive();
+    if (this.synth) {
+      try {
+        this.synth.cancel();
+      } catch {}
+    }
     this.emitState();
   }
 
@@ -146,13 +179,25 @@ export class DocumentNarrator {
 
   private speakSentence(index: number) {
     if (!this.synth || index < 0 || index >= this.sentences.length) {
-      this.emitState();
+      this.stop();
       return;
     }
 
-    this.synth.cancel();
+    try {
+      this.synth.cancel();
+    } catch {}
 
     const sentence = this.sentences[index];
+    if (!sentence || !sentence.trim()) {
+      if (this.currentIndex < this.sentences.length - 1) {
+        this.currentIndex++;
+        this.speakSentence(this.currentIndex);
+      } else {
+        this.stop();
+      }
+      return;
+    }
+
     this.utterance = new SpeechSynthesisUtterance(sentence);
     this.utterance.rate = this.rate;
 
@@ -167,17 +212,28 @@ export class DocumentNarrator {
         this.speakSentence(this.currentIndex);
       } else {
         this.currentIndex = 0;
-        this.emitState();
+        this.stop();
       }
     };
 
-    this.utterance.onerror = () => {
+    this.utterance.onerror = (e) => {
+      // Ignore 'interrupted' / 'canceled' errors from speech switching
+      if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        console.warn('SpeechSynthesis error:', e.error);
+      }
       this.emitState();
     };
 
-    this.synth.speak(this.utterance);
+    this.startKeepAlive();
+    try {
+      this.synth.speak(this.utterance);
+    } catch (e) {
+      console.warn('Failed to speak sentence:', e);
+      this.stop();
+    }
     this.emitState();
   }
+
 
   private emitState() {
     const isSpeaking = Boolean(this.synth?.speaking);
@@ -190,5 +246,13 @@ export class DocumentNarrator {
       currentText: this.sentences[this.currentIndex] || '',
       rate: this.rate,
     });
+  }
+
+  public destroy() {
+    this.stop();
+    if (this.synth && this.synth.onvoiceschanged) {
+      this.synth.onvoiceschanged = null;
+    }
+    this.onStateChange = () => {};
   }
 }

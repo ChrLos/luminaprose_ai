@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   DocumentItem, 
-  ThemeId, 
-  TypographySettings, 
-  ViewLayout,
-  TocHeading 
+  ViewLayout, 
+  DEFAULT_TYPOGRAPHY_SETTINGS, 
+  APP_STORAGE_KEYS, 
+  CURRENT_APP_VERSION 
 } from './types';
-import { THEMES } from './utils/themes';
-import { SAMPLE_DOCUMENTS } from './utils/samples';
-import { extractHeadings } from './utils/markdownParser';
+import { useDocumentManager } from './hooks/useDocumentManager';
+import { useProseSettings } from './hooks/useProseSettings';
+import { useModalState } from './hooks/useModalState';
+import { syncEditorToPreview, syncPreviewToEditor } from './utils/syncScrollEngine';
+import { ambientAudio } from './utils/ambientAudio';
 import { TopBar } from './components/TopBar';
 import { Editor } from './components/Editor';
 import { Preview } from './components/Preview';
@@ -22,41 +24,6 @@ import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { VersionHistoryDrawer } from './components/VersionHistoryDrawer';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { ChangelogModal } from './components/ChangelogModal';
-import { ambientAudio } from './utils/ambientAudio';
-
-const CURRENT_APP_VERSION = 'v1.1.1';
-
-const STORAGE_KEYS = {
-  DOCS: 'lumina_markdown_documents_v1',
-  CURRENT_DOC_ID: 'lumina_markdown_active_id_v1',
-  SETTINGS: 'lumina_markdown_settings_v1',
-  THEME: 'lumina_markdown_theme_v1',
-  VIEW: 'lumina_markdown_view_v1',
-  KEY_SOUND: 'lumina_markdown_key_sound_v1',
-  CHANGELOG_SEEN_VERSION: 'lumina_markdown_changelog_seen_v1_1_1',
-};
-
-const DEFAULT_SETTINGS: TypographySettings = {
-  fontFamily: 'Newsreader',
-  headerFontFamily: 'Plus Jakarta Sans',
-  fontSize: 19,
-  lineHeight: '1.8',
-  measureWidth: 'optimal',
-  paragraphSpacing: 'normal',
-  alignment: 'left',
-  letterSpacing: 'normal',
-  wordSpacing: 'normal',
-  dropCaps: true,
-  showLineNumbers: false,
-  codeLigatures: true,
-  smoothTypewriter: false,
-  focusMode: false,
-  highlightSyntax: true,
-  readingGuide: false,
-  bionicReading: false,
-  screenWarmth: 0,
-  paperTexture: false,
-};
 
 interface HistorySnapshot {
   content: string;
@@ -66,66 +33,62 @@ interface HistorySnapshot {
 }
 
 export default function App() {
-  // 1. Documents state
-  const [documents, setDocuments] = useState<DocumentItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.DOCS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.id && parsed[0]?.content !== undefined) {
-          return parsed;
-        }
-      }
-    } catch {
-      // Fallback
-    }
-    return SAMPLE_DOCUMENTS;
-  });
+  // 1. Unified Document Management Hook
+  const {
+    documents,
+    activeDocuments,
+    activeDoc,
+    activeDocId,
+    setActiveDocId,
+    updateActiveContent,
+    createDocument,
+    deleteDocument,
+    restoreDocument,
+    permanentDeleteDocument,
+    emptyTrash,
+    renameDocument,
+    importDocuments,
+    rescanStorage,
+  } = useDocumentManager();
 
-  const [currentDocId, setCurrentDocId] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_DOC_ID);
-      if (saved && documents.some((d) => d.id === saved)) return saved;
-    } catch {
-      // Fallback
-    }
-    return documents[0]?.id || SAMPLE_DOCUMENTS[0].id;
-  });
+  // 2. Unified Prose Settings & Themes Hook
+  const {
+    themeId,
+    setThemeId,
+    currentTheme: theme,
+    settings,
+    setSettings,
+    updateSetting,
+    resetSettings,
+  } = useProseSettings();
 
-  // Current Active Document with guarantee against undefined
-  const currentDoc = useMemo(() => {
-    return documents.find((d) => d.id === currentDocId) || documents[0] || SAMPLE_DOCUMENTS[0];
-  }, [documents, currentDocId]);
+  // 3. Centralized Modal State Hook
+  const {
+    isExportOpen,
+    setIsExportOpen,
+    isAmbientSoundOpen,
+    setIsAmbientSoundOpen,
+    isCommandPaletteOpen,
+    setIsCommandPaletteOpen,
+    isShortcutsOpen,
+    setIsShortcutsOpen,
+    isChangelogOpen,
+    setIsChangelogOpen,
+    isDocManagerOpen,
+    setIsDocManagerOpen,
+    isTypographyDrawerOpen,
+    setIsTypographyDrawerOpen,
+    isHistoryDrawerOpen,
+    setIsHistoryDrawerOpen,
+  } = useModalState();
 
-  // Persistent Undo / Redo History Stack across views and toolbar clicks
-  const docHistoryRef = useRef<Record<string, { past: HistorySnapshot[]; future: HistorySnapshot[] }>>({});
-  const [, setHistoryVersion] = useState(0);
-
-  // 2. Settings & Themes state
-  const [themeId, setThemeId] = useState<ThemeId>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.THEME) as ThemeId;
-      if (saved && THEMES[saved]) return saved;
-    } catch {
-      // Fallback
-    }
-    return 'linen';
-  });
-
-  const [settings, setSettings] = useState<TypographySettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (saved) return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
-    } catch {
-      // Fallback
-    }
-    return DEFAULT_SETTINGS;
-  });
-
+  // 4. View Layout & Sound Preferences
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.VIEW) as ViewLayout;
-      if (saved) return saved;
+      const saved = localStorage.getItem('lumina_markdown_view_layout');
+      if (saved === 'split' || saved === 'reader' || saved === 'editor' || saved === 'slides') {
+        return saved;
+      }
     } catch {
       // Fallback
     }
@@ -134,90 +97,70 @@ export default function App() {
 
   const [playTypewriterSound, setPlayTypewriterSound] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.KEY_SOUND);
+      const saved = localStorage.getItem(APP_STORAGE_KEYS.TYPEWRITER_SOUND);
       return saved === 'true';
     } catch {
       return false;
     }
   });
 
-  // 3. Modals & Drawers state
-  const [isChangelogOpen, setIsChangelogOpen] = useState<boolean>(() => {
+  // Persistent changelog trigger on new version release
+  useEffect(() => {
     try {
-      const seen = localStorage.getItem(STORAGE_KEYS.CHANGELOG_SEEN_VERSION);
+      const seen = localStorage.getItem(APP_STORAGE_KEYS.CHANGELOG_VIEWED);
       if (seen !== CURRENT_APP_VERSION) {
-        localStorage.setItem(STORAGE_KEYS.CHANGELOG_SEEN_VERSION, CURRENT_APP_VERSION);
-        return true;
+        localStorage.setItem(APP_STORAGE_KEYS.CHANGELOG_VIEWED, CURRENT_APP_VERSION);
+        setIsChangelogOpen(true);
       }
     } catch {
-      // Fallback
+      // Ignore storage errors
     }
-    return false;
-  });
-  const [isTypographyOpen, setIsTypographyOpen] = useState(false);
-  const [isExportOpen, setIsExportOpen] = useState(false);
-  const [isDocManagerOpen, setIsDocManagerOpen] = useState(false);
-  const [isAmbientOpen, setIsAmbientOpen] = useState(false);
-  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [ambientPlaying, setAmbientPlaying] = useState(false);
-  const [isNavVisible, setIsNavVisible] = useState(true);
-
-  // Sync scroll lock toggle and active scroll source driver
-  const [syncScroll, setSyncScroll] = useState(true);
-  const previewScrollRef = useRef<HTMLDivElement>(null);
-  const editorScrollRef = useRef<HTMLTextAreaElement>(null);
-  const activeScrollSourceRef = useRef<'editor' | 'preview' | null>(null);
-  const scrollSourceResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Current theme config
-  const theme = THEMES[themeId] || THEMES.linen;
-
-  // Persist State Changes
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.DOCS, JSON.stringify(documents));
-    } catch {}
-  }, [documents]);
+  }, [setIsChangelogOpen]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_DOC_ID, currentDocId);
-    } catch {}
-  }, [currentDocId]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.THEME, themeId);
-      document.documentElement.setAttribute('data-theme-category', theme.category);
-    } catch {}
-  }, [themeId, theme.category]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    } catch {}
-  }, [settings]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.VIEW, viewLayout);
+      localStorage.setItem('lumina_markdown_view_layout', viewLayout);
     } catch {}
   }, [viewLayout]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.KEY_SOUND, String(playTypewriterSound));
+      localStorage.setItem(APP_STORAGE_KEYS.TYPEWRITER_SOUND, String(playTypewriterSound));
     } catch {}
   }, [playTypewriterSound]);
 
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme-category', theme.category);
+  }, [theme.category]);
+
+  const [ambientPlaying, setAmbientPlaying] = useState(false);
+  const [isNavVisible, setIsNavVisible] = useState(true);
+
+  // Sync scroll lock toggle, active scroll source driver, and cached anchors
+  const [syncScroll, setSyncScroll] = useState(true);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
+  const editorScrollRef = useRef<HTMLTextAreaElement>(null);
+  const activeScrollerRef = useRef<'editor' | 'preview' | null>(null);
+  const activeScrollerTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleInteraction = useCallback((scroller: 'editor' | 'preview') => {
+    activeScrollerRef.current = scroller;
+    if (activeScrollerTimerRef.current) clearTimeout(activeScrollerTimerRef.current);
+    activeScrollerTimerRef.current = setTimeout(() => {
+      activeScrollerRef.current = null;
+    }, 150);
+  }, []);
+
+  // Persistent Undo / Redo History Stack across views and toolbar clicks
+  const docHistoryRef = useRef<Record<string, { past: HistorySnapshot[]; future: HistorySnapshot[] }>>({});
+  const [, setHistoryVersion] = useState(0);
+
   // Record history snapshot helper
   const handleRecordHistory = useCallback((beforeContent: string, selStart?: number, selEnd?: number) => {
-    if (!docHistoryRef.current[currentDocId]) {
-      docHistoryRef.current[currentDocId] = { past: [], future: [] };
+    if (!docHistoryRef.current[activeDocId]) {
+      docHistoryRef.current[activeDocId] = { past: [], future: [] };
     }
-    const hist = docHistoryRef.current[currentDocId];
+    const hist = docHistoryRef.current[activeDocId];
     const lastEntry = hist.past[hist.past.length - 1];
     
     // Avoid saving identical content or undefined content
@@ -234,71 +177,58 @@ export default function App() {
       hist.future = [];
       setHistoryVersion((v) => v + 1);
     }
-  }, [currentDocId]);
+  }, [activeDocId]);
 
   // Undo handler
   const handleUndo = useCallback(() => {
-    const hist = docHistoryRef.current[currentDocId];
+    const hist = docHistoryRef.current[activeDocId];
     if (!hist || hist.past.length === 0) return;
 
-    // Pop until we find a snapshot that differs from the current document content
     let previousSnapshot = hist.past.pop();
-    while (previousSnapshot && previousSnapshot.content === currentDoc.content && hist.past.length > 0) {
+    while (previousSnapshot && previousSnapshot.content === activeDoc.content && hist.past.length > 0) {
       previousSnapshot = hist.past.pop();
     }
 
-    if (!previousSnapshot || previousSnapshot.content === currentDoc.content) {
+    if (!previousSnapshot || previousSnapshot.content === activeDoc.content) {
       setHistoryVersion((v) => v + 1);
       return;
     }
 
     hist.future.push({
-      content: currentDoc.content,
+      content: activeDoc.content,
       timestamp: Date.now(),
     });
 
-    setDocuments((prev) =>
-      prev.map((doc) =>
-        doc.id === currentDocId
-          ? { ...doc, content: previousSnapshot.content, updatedAt: Date.now() }
-          : doc
-      )
-    );
+    updateActiveContent(previousSnapshot.content);
     setHistoryVersion((v) => v + 1);
-  }, [currentDocId, currentDoc.content]);
+  }, [activeDocId, activeDoc.content, updateActiveContent]);
 
   // Redo handler
   const handleRedo = useCallback(() => {
-    const hist = docHistoryRef.current[currentDocId];
+    const hist = docHistoryRef.current[activeDocId];
     if (!hist || hist.future.length === 0) return;
 
     let nextSnapshot = hist.future.pop();
-    while (nextSnapshot && nextSnapshot.content === currentDoc.content && hist.future.length > 0) {
+    while (nextSnapshot && nextSnapshot.content === activeDoc.content && hist.future.length > 0) {
       nextSnapshot = hist.future.pop();
     }
 
-    if (!nextSnapshot || nextSnapshot.content === currentDoc.content) {
+    if (!nextSnapshot || nextSnapshot.content === activeDoc.content) {
       setHistoryVersion((v) => v + 1);
       return;
     }
 
     hist.past.push({
-      content: currentDoc.content,
+      content: activeDoc.content,
       timestamp: Date.now(),
     });
 
-    setDocuments((prev) =>
-      prev.map((doc) =>
-        doc.id === currentDocId
-          ? { ...doc, content: nextSnapshot.content, updatedAt: Date.now() }
-          : doc
-      )
-    );
+    updateActiveContent(nextSnapshot.content);
     setHistoryVersion((v) => v + 1);
-  }, [currentDocId, currentDoc.content]);
+  }, [activeDocId, activeDoc.content, updateActiveContent]);
 
-  const canUndo = (docHistoryRef.current[currentDocId]?.past.length || 0) > 0;
-  const canRedo = (docHistoryRef.current[currentDocId]?.future.length || 0) > 0;
+  const canUndo = (docHistoryRef.current[activeDocId]?.past.length || 0) > 0;
+  const canRedo = (docHistoryRef.current[activeDocId]?.future.length || 0) > 0;
 
   // Global Keyboard Shortcuts
   useEffect(() => {
@@ -311,7 +241,7 @@ export default function App() {
           return;
         }
 
-        // Global Undo/Redo: Prevent when in input, textarea, modal dialog, or any open overlay
+        // Global Undo/Redo: Prevent when inside active input, textarea, or open dialog
         const activeEl = document.activeElement as HTMLElement | null;
         const activeTag = activeEl?.tagName.toLowerCase();
         const isInsideInput = activeTag === 'textarea' || activeTag === 'input' || activeTag === 'select' || Boolean(activeEl?.isContentEditable);
@@ -320,13 +250,12 @@ export default function App() {
           isCommandPaletteOpen ||
           isDocManagerOpen ||
           isExportOpen ||
-          isAmbientOpen ||
+          isAmbientSoundOpen ||
           isShortcutsOpen ||
-          isHistoryOpen ||
-          isTypographyOpen;
+          isHistoryDrawerOpen ||
+          isTypographyDrawerOpen;
 
         if (isInsideInput || isInsideDialog || isAnyModalOpen) {
-          // Allow native browser undo/redo inside inputs/modals without mutating parent doc history
           return;
         }
 
@@ -365,298 +294,66 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo]);
-
-  // Update Markdown content in current document
-  const handleUpdateContent = useCallback((newContent: string) => {
-    setDocuments((prev) =>
-      prev.map((doc) =>
-        doc.id === currentDocId
-          ? { ...doc, content: newContent, updatedAt: Date.now() }
-          : doc
-      )
-    );
-  }, [currentDocId]);
-
-  // Create new blank document
-  const handleCreateDocument = useCallback(() => {
-    const newDoc: DocumentItem = {
-      id: 'doc-' + Date.now(),
-      title: 'Untitled Note ' + (documents.length + 1),
-      content: '# Untitled Note\n\nStart writing your thoughts...',
-      updatedAt: Date.now(),
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
-    setCurrentDocId(newDoc.id);
-  }, [documents.length]);
-
-  // Delete Document
-  const handleDeleteDocument = useCallback((id: string) => {
-    setDocuments((prev) => {
-      if (prev.length <= 1) {
-        const newDoc: DocumentItem = {
-          id: 'doc-' + Date.now(),
-          title: 'Untitled Note 1',
-          content: '# Untitled Note\n\nStart writing your thoughts...',
-          updatedAt: Date.now(),
-        };
-        setCurrentDocId(newDoc.id);
-        return [newDoc];
-      }
-      const remaining = prev.filter((d) => d.id !== id);
-      if (currentDocId === id && remaining.length > 0) {
-        setCurrentDocId(remaining[0].id);
-      }
-      return remaining;
-    });
-  }, [currentDocId]);
-
-  // Rename Document
-  const handleRenameDocument = useCallback((id: string, newTitle: string) => {
-    setDocuments((prev) =>
-      prev.map((doc) => (doc.id === id ? { ...doc, title: newTitle } : doc))
-    );
-  }, []);
-
-  // Import Document from File
-  const handleImportDocument = useCallback((title: string, content: string) => {
-    const newDoc: DocumentItem = {
-      id: 'doc-' + Date.now(),
-      title,
-      content,
-      updatedAt: Date.now(),
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
-    setCurrentDocId(newDoc.id);
-  }, []);
+  }, [
+    handleUndo, 
+    handleRedo, 
+    setIsCommandPaletteOpen, 
+    setIsShortcutsOpen, 
+    isCommandPaletteOpen, 
+    isDocManagerOpen, 
+    isExportOpen, 
+    isAmbientSoundOpen, 
+    isShortcutsOpen, 
+    isHistoryDrawerOpen, 
+    isTypographyDrawerOpen
+  ]);
 
   // Load Preset Sample
   const handleLoadSample = useCallback((sample: DocumentItem) => {
-    setDocuments((prev) => {
-      const existing = prev.find((d) => d.id === sample.id);
-      if (existing) {
-        setCurrentDocId(sample.id);
-        return prev;
-      } else {
-        const sampleCopy: DocumentItem = {
-          ...sample,
-          id: 'sample-' + Date.now(),
-          updatedAt: Date.now(),
-        };
-        setCurrentDocId(sampleCopy.id);
-        return [sampleCopy, ...prev];
-      }
-    });
-  }, []);
-
-  // Settings update helper
-  const handleUpdateSettings = useCallback((newSettings: Partial<TypographySettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
-  }, []);
-
-  // Extract Headings for Section-Aware Scroll Sync
-  const docHeadings = useMemo(() => extractHeadings(currentDoc.content), [currentDoc.content]);
-
-  // Section Anchor Construction for Split View Sync
-  const buildSyncAnchors = useCallback((
-    markdown: string,
-    headings: TocHeading[],
-    editorEl: HTMLTextAreaElement,
-    previewEl: HTMLDivElement
-  ) => {
-    const editorMaxScroll = editorEl.scrollHeight - editorEl.clientHeight;
-    const previewMaxScroll = previewEl.scrollHeight - previewEl.clientHeight;
-
-    if (editorMaxScroll <= 0 || previewMaxScroll <= 0) {
-      return [
-        { e: 0, p: 0 },
-        { e: Math.max(0, editorMaxScroll), p: Math.max(0, previewMaxScroll) },
-      ];
+    const existing = documents.find((d) => d.id === sample.id);
+    if (existing) {
+      setActiveDocId(sample.id);
+    } else {
+      const sampleCopy: DocumentItem = {
+        ...sample,
+        id: 'sample-' + Date.now(),
+        updatedAt: Date.now(),
+      };
+      importDocuments([sampleCopy]);
     }
+  }, [documents, setActiveDocId, importDocuments]);
 
-    const rawLines = markdown.split('\n');
-    const totalLines = Math.max(1, rawLines.length);
-
-    const rawAnchors: { e: number; p: number }[] = [{ e: 0, p: 0 }];
-
-    // 1. Map headings accurately using exact DOM bounding box offsets
-    if (headings.length > 0) {
-      const previewContainerRect = previewEl.getBoundingClientRect();
-      const previewPaddingTop = parseFloat(window.getComputedStyle(previewEl).paddingTop) || 0;
-
-      for (const h of headings) {
-        if (h.lineIndex !== undefined) {
-          const targetEl = document.getElementById(h.id);
-          if (targetEl) {
-            const elRect = targetEl.getBoundingClientRect();
-            // Exact scroll position in Preview to place heading at top of content area
-            const pOffset = elRect.top - previewContainerRect.top + previewEl.scrollTop - previewPaddingTop;
-            // Exact scroll position in Editor textarea to place line at top of content area
-            const eOffset = (h.lineIndex / totalLines) * editorEl.scrollHeight;
-
-            const clampedE = Math.max(0, Math.min(editorMaxScroll, eOffset));
-            const clampedP = Math.max(0, Math.min(previewMaxScroll, pOffset));
-
-            rawAnchors.push({ e: clampedE, p: clampedP });
-          }
-        }
-      }
-    }
-
-    rawAnchors.push({ e: editorMaxScroll, p: previewMaxScroll });
-
-    // Sort by editor scroll offset e
-    rawAnchors.sort((a, b) => a.e - b.e);
-
-    // Clean and deduplicate anchors to guarantee strict monotonicity
-    const cleanAnchors: { e: number; p: number }[] = [rawAnchors[0]];
-
-    for (let i = 1; i < rawAnchors.length; i++) {
-      const prev = cleanAnchors[cleanAnchors.length - 1];
-      const curr = rawAnchors[i];
-
-      if (curr.e > prev.e + 0.5 && curr.p >= prev.p) {
-        cleanAnchors.push({ e: curr.e, p: curr.p });
-      }
-    }
-
-    const last = cleanAnchors[cleanAnchors.length - 1];
-    if (last.e < editorMaxScroll || last.p < previewMaxScroll) {
-      cleanAnchors.push({ e: editorMaxScroll, p: previewMaxScroll });
-    }
-
-    return cleanAnchors;
-  }, []);
-
-  const mapEditorToPreview = useCallback((editorScrollTop: number, anchors: { e: number; p: number }[]) => {
-    if (anchors.length === 0) return 0;
-    if (editorScrollTop <= anchors[0].e) return anchors[0].p;
-
-    const last = anchors[anchors.length - 1];
-    if (editorScrollTop >= last.e) return last.p;
-
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a1 = anchors[i];
-      const a2 = anchors[i + 1];
-
-      if (editorScrollTop >= a1.e && editorScrollTop <= a2.e) {
-        const eRange = a2.e - a1.e;
-        if (eRange <= 0) return a1.p;
-
-        const progress = (editorScrollTop - a1.e) / eRange;
-        return a1.p + progress * (a2.p - a1.p);
-      }
-    }
-
-    return last.p;
-  }, []);
-
-  const mapPreviewToEditor = useCallback((previewScrollTop: number, anchors: { e: number; p: number }[]) => {
-    if (anchors.length === 0) return 0;
-    if (previewScrollTop <= anchors[0].p) return anchors[0].e;
-
-    const last = anchors[anchors.length - 1];
-    if (previewScrollTop >= last.p) return last.e;
-
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a1 = anchors[i];
-      const a2 = anchors[i + 1];
-
-      if (previewScrollTop >= a1.p && previewScrollTop <= a2.p) {
-        const pRange = a2.p - a1.p;
-        if (pRange <= 0) return a1.e;
-
-        const progress = (previewScrollTop - a1.p) / pRange;
-        return a1.e + progress * (a2.e - a1.e);
-      }
-    }
-
-    return last.e;
-  }, []);
-
-  // Editor scroll sync to preview (Section-Aware Synchronous Sync)
-  const handleEditorScrollSync = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
+  // Editor scroll sync to preview (Section Anchor Sync)
+  const handleEditorScrollSync = useCallback((_scrollTop: number, _scrollHeight: number, _clientHeight: number) => {
     if (!syncScroll || !previewScrollRef.current || !editorScrollRef.current) return;
     
-    // If Preview is currently the active scroll driver, ignore Editor's scroll echo
-    if (activeScrollSourceRef.current === 'preview') return;
+    // Ignore scroll event if preview is the active scrolling source
+    if (activeScrollerRef.current === 'preview') return;
+    activeScrollerRef.current = 'editor';
+    if (activeScrollerTimerRef.current) clearTimeout(activeScrollerTimerRef.current);
 
-    // Mark Editor as active scroll driver
-    activeScrollSourceRef.current = 'editor';
-    if (scrollSourceResetTimeoutRef.current) {
-      clearTimeout(scrollSourceResetTimeoutRef.current);
-    }
+    syncEditorToPreview(editorScrollRef.current, previewScrollRef.current, activeDoc.content);
 
-    const maxScroll = scrollHeight - clientHeight;
-    const targetMaxScroll = previewScrollRef.current.scrollHeight - previewScrollRef.current.clientHeight;
+    activeScrollerTimerRef.current = setTimeout(() => {
+      activeScrollerRef.current = null;
+    }, 120);
+  }, [syncScroll, activeDoc.content]);
 
-    if (targetMaxScroll <= 0) return;
-
-    let targetScrollTop = 0;
-    if (maxScroll <= 0 || scrollTop <= 0) {
-      targetScrollTop = 0;
-    } else if (scrollTop >= maxScroll - 2) {
-      targetScrollTop = targetMaxScroll;
-    } else {
-      const anchors = buildSyncAnchors(
-        currentDoc.content,
-        docHeadings,
-        editorScrollRef.current,
-        previewScrollRef.current
-      );
-      targetScrollTop = mapEditorToPreview(scrollTop, anchors);
-    }
-
-    if (Math.abs(previewScrollRef.current.scrollTop - targetScrollTop) > 0.5) {
-      previewScrollRef.current.scrollTop = targetScrollTop;
-    }
-
-    scrollSourceResetTimeoutRef.current = setTimeout(() => {
-      activeScrollSourceRef.current = null;
-    }, 150);
-  };
-
-  // Preview scroll sync to editor (Section-Aware Synchronous Sync)
-  const handlePreviewScrollSync = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
+  // Preview scroll sync to editor (Section Anchor Sync)
+  const handlePreviewScrollSync = useCallback((_scrollTop: number, _scrollHeight: number, _clientHeight: number) => {
     if (!syncScroll || !editorScrollRef.current || !previewScrollRef.current) return;
     
-    // If Editor is currently the active scroll driver, ignore Preview's scroll echo
-    if (activeScrollSourceRef.current === 'editor') return;
+    // Ignore scroll event if editor is the active scrolling source
+    if (activeScrollerRef.current === 'editor') return;
+    activeScrollerRef.current = 'preview';
+    if (activeScrollerTimerRef.current) clearTimeout(activeScrollerTimerRef.current);
 
-    // Mark Preview as active scroll driver
-    activeScrollSourceRef.current = 'preview';
-    if (scrollSourceResetTimeoutRef.current) {
-      clearTimeout(scrollSourceResetTimeoutRef.current);
-    }
+    syncPreviewToEditor(previewScrollRef.current, editorScrollRef.current, activeDoc.content);
 
-    const maxScroll = scrollHeight - clientHeight;
-    const targetMaxScroll = editorScrollRef.current.scrollHeight - editorScrollRef.current.clientHeight;
-
-    if (targetMaxScroll <= 0) return;
-
-    let targetScrollTop = 0;
-    if (maxScroll <= 0 || scrollTop <= 0) {
-      targetScrollTop = 0;
-    } else if (scrollTop >= maxScroll - 2) {
-      targetScrollTop = targetMaxScroll;
-    } else {
-      const anchors = buildSyncAnchors(
-        currentDoc.content,
-        docHeadings,
-        editorScrollRef.current,
-        previewScrollRef.current
-      );
-      targetScrollTop = mapPreviewToEditor(scrollTop, anchors);
-    }
-
-    if (Math.abs(editorScrollRef.current.scrollTop - targetScrollTop) > 0.5) {
-      editorScrollRef.current.scrollTop = targetScrollTop;
-    }
-
-    scrollSourceResetTimeoutRef.current = setTimeout(() => {
-      activeScrollSourceRef.current = null;
-    }, 150);
-  };
+    activeScrollerTimerRef.current = setTimeout(() => {
+      activeScrollerRef.current = null;
+    }, 120);
+  }, [syncScroll, activeDoc.content]);
 
   // Handle ambient status refresh
   const handleAudioStateChange = () => {
@@ -665,8 +362,8 @@ export default function App() {
 
   // Template snippet inserter
   const handleInsertTemplate = (snippet: string) => {
-    handleRecordHistory(currentDoc.content);
-    handleUpdateContent(currentDoc.content + snippet);
+    handleRecordHistory(activeDoc.content);
+    updateActiveContent(activeDoc.content + snippet);
   };
 
   return (
@@ -681,16 +378,16 @@ export default function App() {
       <TopBar
         currentView={viewLayout}
         onViewChange={setViewLayout}
-        documentTitle={currentDoc.title}
-        onRenameDocument={(title) => handleRenameDocument(currentDoc.id, title)}
+        documentTitle={activeDoc.title}
+        onRenameDocument={(title) => renameDocument(activeDoc.id, title)}
         theme={theme}
-        onOpenTypography={() => setIsTypographyOpen(true)}
+        onOpenTypography={() => setIsTypographyDrawerOpen(true)}
         onOpenExport={() => setIsExportOpen(true)}
         onOpenDocManager={() => setIsDocManagerOpen(true)}
-        onOpenAmbient={() => setIsAmbientOpen(true)}
+        onOpenAmbient={() => setIsAmbientSoundOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-        onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenHistory={() => setIsHistoryDrawerOpen(true)}
         isAmbientPlaying={ambientPlaying}
         syncScroll={syncScroll}
         onToggleSyncScroll={() => setSyncScroll((prev) => !prev)}
@@ -698,24 +395,23 @@ export default function App() {
 
       {/* Main Workspace Stage */}
       <main className="flex-1 flex overflow-hidden relative">
-        {/* Split View (Top and down on mobile flex-col, side-by-side on desktop md:flex-row) */}
+        {/* Split View */}
         {viewLayout === 'split' && (
           <div className="flex flex-col md:flex-row w-full h-full overflow-hidden">
             <div 
               className="w-full md:w-1/2 h-1/2 md:h-full min-w-0 border-b md:border-b-0 md:border-r" 
               style={{ borderColor: theme.border }}
-              onPointerEnter={() => { activeScrollSourceRef.current = 'editor'; }}
-              onWheel={() => { activeScrollSourceRef.current = 'editor'; }}
-              onTouchStart={() => { activeScrollSourceRef.current = 'editor'; }}
             >
               <Editor
-                value={currentDoc.content}
-                onChange={handleUpdateContent}
+                currentDocId={activeDoc.id}
+                value={activeDoc.content}
+                onChange={updateActiveContent}
                 theme={theme}
                 settings={settings}
                 playTypewriterSound={playTypewriterSound}
                 scrollRef={editorScrollRef}
                 onScrollSync={handleEditorScrollSync}
+                onInteraction={handleInteraction}
                 onScrollDirectionChange={(v) => setIsNavVisible(v)}
                 canUndo={canUndo}
                 canRedo={canRedo}
@@ -724,21 +420,22 @@ export default function App() {
                 onRecordHistory={handleRecordHistory}
               />
             </div>
-            <div 
-              className="w-full md:w-1/2 h-1/2 md:h-full min-w-0"
-              onPointerEnter={() => { activeScrollSourceRef.current = 'preview'; }}
-              onWheel={() => { activeScrollSourceRef.current = 'preview'; }}
-              onTouchStart={() => { activeScrollSourceRef.current = 'preview'; }}
-            >
+            <div className="w-full md:w-1/2 h-1/2 md:h-full min-w-0">
               <Preview
-                markdown={currentDoc.content}
-                onUpdateMarkdown={handleUpdateContent}
+                currentDocId={activeDoc.id}
+                markdown={activeDoc.content}
+                onUpdateMarkdown={updateActiveContent}
                 theme={theme}
                 settings={settings}
-                onUpdateSettings={handleUpdateSettings}
-                onOpenTypography={() => setIsTypographyOpen(true)}
+                onUpdateSettings={(partial) => {
+                  Object.entries(partial).forEach(([k, v]) => {
+                    updateSetting(k as keyof typeof settings, v as never);
+                  });
+                }}
+                onOpenTypography={() => setIsTypographyDrawerOpen(true)}
                 scrollRef={previewScrollRef}
                 onScrollSync={handlePreviewScrollSync}
+                onInteraction={handleInteraction}
                 onScrollDirectionChange={(v) => setIsNavVisible(v)}
               />
             </div>
@@ -749,12 +446,17 @@ export default function App() {
         {viewLayout === 'reader' && (
           <div className="w-full h-full">
             <Preview
-              markdown={currentDoc.content}
-              onUpdateMarkdown={handleUpdateContent}
+              currentDocId={activeDoc.id}
+              markdown={activeDoc.content}
+              onUpdateMarkdown={updateActiveContent}
               theme={theme}
               settings={settings}
-              onUpdateSettings={handleUpdateSettings}
-              onOpenTypography={() => setIsTypographyOpen(true)}
+              onUpdateSettings={(partial) => {
+                Object.entries(partial).forEach(([k, v]) => {
+                  updateSetting(k as keyof typeof settings, v as never);
+                });
+              }}
+              onOpenTypography={() => setIsTypographyDrawerOpen(true)}
               onScrollDirectionChange={(v) => setIsNavVisible(v)}
             />
           </div>
@@ -764,8 +466,9 @@ export default function App() {
         {viewLayout === 'editor' && (
           <div className="w-full h-full max-w-4xl mx-auto border-x" style={{ borderColor: theme.border }}>
             <Editor
-              value={currentDoc.content}
-              onChange={handleUpdateContent}
+              currentDocId={activeDoc.id}
+              value={activeDoc.content}
+              onChange={updateActiveContent}
               theme={theme}
               settings={settings}
               playTypewriterSound={playTypewriterSound}
@@ -782,7 +485,7 @@ export default function App() {
         {/* Presentation Slide View */}
         {viewLayout === 'slides' && (
           <PresentationView
-            markdown={currentDoc.content}
+            markdown={activeDoc.content}
             theme={theme}
             settings={settings}
             onClose={() => setViewLayout('split')}
@@ -797,9 +500,9 @@ export default function App() {
         isVisible={isNavVisible}
         theme={theme}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-        onOpenAmbient={() => setIsAmbientOpen(true)}
-        onOpenHistory={() => setIsHistoryOpen(true)}
-        onOpenTypography={() => setIsTypographyOpen(true)}
+        onOpenAmbient={() => setIsAmbientSoundOpen(true)}
+        onOpenHistory={() => setIsHistoryDrawerOpen(true)}
+        onOpenTypography={() => setIsTypographyDrawerOpen(true)}
         onOpenDocManager={() => setIsDocManagerOpen(true)}
         onOpenExport={() => setIsExportOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
@@ -807,100 +510,128 @@ export default function App() {
       />
 
       {/* Slide-out Typography & Theme Studio Drawer */}
-      <TypographyDrawer
-        isOpen={isTypographyOpen}
-        onClose={() => setIsTypographyOpen(false)}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        currentThemeId={themeId}
-        onSelectTheme={setThemeId}
-        onResetDefaults={() => setSettings(DEFAULT_SETTINGS)}
-      />
+      {isTypographyDrawerOpen && (
+        <TypographyDrawer
+          isOpen={isTypographyDrawerOpen}
+          onClose={() => setIsTypographyDrawerOpen(false)}
+          settings={settings}
+          onUpdateSettings={(partial) => {
+            Object.entries(partial).forEach(([k, v]) => {
+              updateSetting(k as keyof typeof settings, v as never);
+            });
+          }}
+          currentThemeId={themeId}
+          onSelectTheme={setThemeId}
+          onResetDefaults={resetSettings}
+        />
+      )}
 
       {/* Export & Publish Modal */}
-      <ExportModal
-        isOpen={isExportOpen}
-        onClose={() => setIsExportOpen(false)}
-        markdown={currentDoc.content}
-        documentTitle={currentDoc.title}
-        theme={theme}
-        settings={settings}
-      />
+      {isExportOpen && (
+        <ExportModal
+          isOpen={isExportOpen}
+          onClose={() => setIsExportOpen(false)}
+          markdown={activeDoc.content}
+          documentTitle={activeDoc.title}
+          theme={theme}
+          settings={settings}
+        />
+      )}
 
       {/* Document Library & Manager Modal */}
-      <DocumentManagerModal
-        isOpen={isDocManagerOpen}
-        onClose={() => setIsDocManagerOpen(false)}
-        documents={documents}
-        currentDocId={currentDoc.id}
-        onSelectDoc={setCurrentDocId}
-        onCreateDoc={handleCreateDocument}
-        onDeleteDoc={handleDeleteDocument}
-        onRenameDoc={handleRenameDocument}
-        onImportDoc={handleImportDocument}
-        onLoadSample={handleLoadSample}
-        theme={theme}
-      />
+      {isDocManagerOpen && (
+        <DocumentManagerModal
+          isOpen={isDocManagerOpen}
+          onClose={() => setIsDocManagerOpen(false)}
+          documents={documents}
+          currentDocId={activeDoc.id}
+          onSelectDoc={setActiveDocId}
+          onCreateDoc={() => createDocument()}
+          onDeleteDoc={deleteDocument}
+          onRestoreDoc={restoreDocument}
+          onPermanentDeleteDoc={permanentDeleteDocument}
+          onEmptyTrash={emptyTrash}
+          onRenameDoc={renameDocument}
+          onImportDoc={(title, content) => createDocument(title, content)}
+          onLoadSample={handleLoadSample}
+          onRescanStorage={rescanStorage}
+          theme={theme}
+        />
+      )}
 
       {/* Ambient Audio Modal */}
-      <AmbientSoundModal
-        isOpen={isAmbientOpen}
-        onClose={() => setIsAmbientOpen(false)}
-        theme={theme}
-        playTypewriterSound={playTypewriterSound}
-        onToggleTypewriterSound={setPlayTypewriterSound}
-        onAudioStateChange={handleAudioStateChange}
-      />
+      {isAmbientSoundOpen && (
+        <AmbientSoundModal
+          isOpen={isAmbientSoundOpen}
+          onClose={() => setIsAmbientSoundOpen(false)}
+          theme={theme}
+          playTypewriterSound={playTypewriterSound}
+          onToggleTypewriterSound={setPlayTypewriterSound}
+          onAudioStateChange={handleAudioStateChange}
+        />
+      )}
 
       {/* Keyboard Shortcuts Modal */}
-      <ShortcutsModal
-        isOpen={isShortcutsOpen}
-        onClose={() => setIsShortcutsOpen(false)}
-        theme={theme}
-      />
+      {isShortcutsOpen && (
+        <ShortcutsModal
+          isOpen={isShortcutsOpen}
+          onClose={() => setIsShortcutsOpen(false)}
+          theme={theme}
+        />
+      )}
 
       {/* Global Spotlight Command Palette (Cmd+K) */}
-      <CommandPaletteModal
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        documents={documents}
-        currentDocId={currentDoc.id}
-        onSelectDoc={setCurrentDocId}
-        onCreateDoc={handleCreateDocument}
-        onViewChange={setViewLayout}
-        onSelectTheme={setThemeId}
-        currentThemeId={themeId}
-        theme={theme}
-        onOpenTypography={() => setIsTypographyOpen(true)}
-        onOpenExport={() => setIsExportOpen(true)}
-        onOpenDocManager={() => setIsDocManagerOpen(true)}
-        onOpenHistory={() => setIsHistoryOpen(true)}
-        onOpenAmbient={() => setIsAmbientOpen(true)}
-        onOpenShortcuts={() => setIsShortcutsOpen(true)}
-        onOpenChangelog={() => setIsChangelogOpen(true)}
-        onInsertTemplate={handleInsertTemplate}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        syncScroll={syncScroll}
-        onToggleSyncScroll={() => setSyncScroll((prev) => !prev)}
-      />
+      {isCommandPaletteOpen && (
+        <CommandPaletteModal
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          documents={activeDocuments}
+          currentDocId={activeDoc.id}
+          onSelectDoc={setActiveDocId}
+          onCreateDoc={() => createDocument()}
+          onViewChange={setViewLayout}
+          onSelectTheme={setThemeId}
+          currentThemeId={themeId}
+          theme={theme}
+          onOpenTypography={() => setIsTypographyDrawerOpen(true)}
+          onOpenExport={() => setIsExportOpen(true)}
+          onOpenDocManager={() => setIsDocManagerOpen(true)}
+          onOpenHistory={() => setIsHistoryDrawerOpen(true)}
+          onOpenAmbient={() => setIsAmbientSoundOpen(true)}
+          onOpenShortcuts={() => setIsShortcutsOpen(true)}
+          onOpenChangelog={() => setIsChangelogOpen(true)}
+          onInsertTemplate={handleInsertTemplate}
+          settings={settings}
+          onUpdateSettings={(partial) => {
+            Object.entries(partial).forEach(([k, v]) => {
+              updateSetting(k as keyof typeof settings, v as never);
+            });
+          }}
+          syncScroll={syncScroll}
+          onToggleSyncScroll={() => setSyncScroll((prev) => !prev)}
+        />
+      )}
 
       {/* Version History & Snapshots Drawer */}
-      <VersionHistoryDrawer
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-        currentDoc={currentDoc}
-        onRestoreContent={handleUpdateContent}
-        theme={theme}
-      />
+      {isHistoryDrawerOpen && (
+        <VersionHistoryDrawer
+          isOpen={isHistoryDrawerOpen}
+          onClose={() => setIsHistoryDrawerOpen(false)}
+          currentDoc={activeDoc}
+          onRestoreContent={updateActiveContent}
+          theme={theme}
+        />
+      )}
 
       {/* First-Time Version Changelog Modal */}
-      <ChangelogModal
-        isOpen={isChangelogOpen}
-        onClose={() => setIsChangelogOpen(false)}
-        theme={theme}
-        version={CURRENT_APP_VERSION}
-      />
+      {isChangelogOpen && (
+        <ChangelogModal
+          isOpen={isChangelogOpen}
+          onClose={() => setIsChangelogOpen(false)}
+          theme={theme}
+          version={CURRENT_APP_VERSION}
+        />
+      )}
     </div>
   );
 }

@@ -23,8 +23,19 @@ function bionicWord(word: string): string {
   return `<b>${prefix}</b>${rest}`;
 }
 
+const bionicCache = new Map<string, string>();
+const MAX_BIONIC_CACHE_SIZE = 30;
+
+export function clearBionicCache(): void {
+  bionicCache.clear();
+}
+
 export function applyBionicReading(html: string): string {
   if (!html || typeof window === 'undefined') return html;
+
+  if (bionicCache.has(html)) {
+    return bionicCache.get(html)!;
+  }
 
   try {
     const parser = new DOMParser();
@@ -98,7 +109,14 @@ export function applyBionicReading(html: string): string {
       node.parentNode?.replaceChild(span, node);
     }
 
-    return doc.body.innerHTML;
+    const result = doc.body.innerHTML;
+    if (bionicCache.size >= MAX_BIONIC_CACHE_SIZE) {
+      const firstKey = bionicCache.keys().next().value;
+      if (firstKey) bionicCache.delete(firstKey);
+    }
+    bionicCache.set(html, result);
+
+    return result;
   } catch {
     return html;
   }
