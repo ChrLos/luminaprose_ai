@@ -3,13 +3,10 @@ import { DocumentItem, APP_STORAGE_KEYS } from '../types';
 import { SAMPLE_DOCUMENTS } from '../utils/samples';
 
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+const SNAPSHOTS_STORAGE_KEY = 'lumina_markdown_snapshots_v1';
 
-// List of all legacy and current storage keys for document persistence
-const DOCUMENT_STORAGE_KEYS = [
-  APP_STORAGE_KEYS.DOCUMENTS,
-  APP_STORAGE_KEYS.DOCUMENTS_V2,
-  'lumina_markdown_documents',
-  'lumina_markdown_documents_v2',
+// Legacy keys for one-time backwards compatibility migration
+const OBSOLETE_KEYS = [
   'lumina_markdown_documents_v1',
   'lumina_documents',
   'lumina_docs',
@@ -19,143 +16,103 @@ const DOCUMENT_STORAGE_KEYS = [
   'documents',
 ];
 
-const SNAPSHOT_KEYS = [
-  'lumina_markdown_snapshots_v1',
-  'lumina_markdown_snapshots',
-  'lumina_snapshots',
-  'snapshots',
-];
+/**
+ * Remove obsolete legacy storage keys so old deleted notes do not linger
+ */
+function cleanupLegacyKeys() {
+  try {
+    for (const key of OBSOLETE_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 /**
- * Deep exhaustive loader that retrieves documents across all current & legacy keys,
- * as well as recovering user drafts from saved snapshots and any JSON stored in localStorage.
+ * Remove snapshots belonging to permanently deleted documents
+ */
+function cleanupSnapshotsForDocs(docIds: string[]) {
+  if (!docIds.length) return;
+  try {
+    const raw = localStorage.getItem(SNAPSHOTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const idSet = new Set(docIds);
+        const filtered = parsed.filter((s: any) => s && !idSet.has(s.docId));
+        localStorage.setItem(SNAPSHOTS_STORAGE_KEY, JSON.stringify(filtered));
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Robust document loader that loads the single authoritative document store
+ * with graceful migration for legacy users.
  */
 export function loadSavedDocuments(): DocumentItem[] {
-  const documentMap = new Map<string, DocumentItem>();
-  const sampleTitles = new Set(SAMPLE_DOCUMENTS.map((s) => s.title.trim().toLowerCase()));
-  const sampleContents = new Set(SAMPLE_DOCUMENTS.map((s) => s.content.trim()));
-
-  const addDoc = (doc: unknown) => {
-    if (!doc || typeof doc !== 'object') return;
-    const d = doc as Record<string, unknown>;
-    const title = typeof d.title === 'string' ? d.title.trim() : '';
-    const content = typeof d.content === 'string' ? d.content : '';
-    const id = typeof d.id === 'string' ? d.id : 'doc-' + Math.random().toString(36).substring(2, 9);
-    const updatedAt = typeof d.updatedAt === 'number' ? d.updatedAt : Date.now();
-    const isDeleted = Boolean(d.isDeleted);
-    const deletedAt = typeof d.deletedAt === 'number' ? d.deletedAt : undefined;
-
-    if (!title && !content) return;
-
-    // Check expiration for deleted documents
-    if (isDeleted && deletedAt && Date.now() - deletedAt > FOURTEEN_DAYS_MS) {
-      return;
-    }
-
-    const docItem: DocumentItem = {
-      id,
-      title: title || 'Untitled Document',
-      content: content || '# Untitled Document\n\n',
-      updatedAt,
-      isDeleted: isDeleted || undefined,
-      deletedAt,
-      tags: Array.isArray(d.tags) ? (d.tags.filter((t) => typeof t === 'string') as string[]) : undefined,
-    };
-
-    // Use unique identifier by ID or content hash
-    const key = docItem.id || docItem.title + ':' + docItem.content.substring(0, 40);
-    if (!documentMap.has(key)) {
-      documentMap.set(key, docItem);
-    }
-  };
-
   try {
-    // 1. Scan all known document keys
-    for (const key of DOCUMENT_STORAGE_KEYS) {
-      const saved = localStorage.getItem(key);
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            parsed.forEach(addDoc);
-          } else if (parsed && typeof parsed === 'object') {
-            addDoc(parsed);
-          }
-        } catch {
-          // Continue
+    // 1. Primary Source of Truth: APP_STORAGE_KEYS.DOCUMENTS ('lumina_markdown_documents')
+    const primary = localStorage.getItem(APP_STORAGE_KEYS.DOCUMENTS);
+    if (primary) {
+      const parsed = JSON.parse(primary);
+      if (Array.isArray(parsed)) {
+        const now = Date.now();
+        // Auto-purge items in Recycle Bin older than 14 days
+        const valid = parsed.filter(
+          (d) => d && typeof d === 'object' && !(d.isDeleted && d.deletedAt && now - d.deletedAt > FOURTEEN_DAYS_MS)
+        );
+        return valid.length > 0 ? valid : SAMPLE_DOCUMENTS;
+      }
+    }
+
+    // 2. Secondary fallback check: APP_STORAGE_KEYS.DOCUMENTS_V2
+    const secondary = localStorage.getItem(APP_STORAGE_KEYS.DOCUMENTS_V2);
+    if (secondary) {
+      const parsed = JSON.parse(secondary);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const now = Date.now();
+        const valid = parsed.filter(
+          (d) => d && typeof d === 'object' && !(d.isDeleted && d.deletedAt && now - d.deletedAt > FOURTEEN_DAYS_MS)
+        );
+        if (valid.length > 0) {
+          localStorage.setItem(APP_STORAGE_KEYS.DOCUMENTS, JSON.stringify(valid));
+          return valid;
         }
       }
     }
 
-    // 2. Scan snapshots for user notes
-    for (const key of SNAPSHOT_KEYS) {
+    // 3. One-time legacy migration if primary has never been initialized
+    for (const key of OBSOLETE_KEYS) {
       const saved = localStorage.getItem(key);
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            for (const snap of parsed) {
-              if (snap && typeof snap === 'object' && snap.content) {
-                const isSample = sampleContents.has(snap.content.trim()) || sampleTitles.has((snap.title || '').trim().toLowerCase());
-                if (!isSample) {
-                  // Found user snapshot! Add it as a restorable document if not already present
-                  const existingDocWithContent = Array.from(documentMap.values()).some((d) => d.content.trim() === snap.content.trim());
-                  if (!existingDocWithContent) {
-                    addDoc({
-                      id: snap.docId || 'doc-' + snap.timestamp || 'doc-recovered-' + Math.random().toString(36).substring(2, 7),
-                      title: snap.title || (snap.label ? `Recovered: ${snap.label}` : 'Recovered Document'),
-                      content: snap.content,
-                      updatedAt: snap.timestamp || Date.now(),
-                    });
-                  }
-                }
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const hasDocs = parsed.some((d) => d && typeof d === 'object' && ('content' in d || 'title' in d));
+            if (hasDocs) {
+              const now = Date.now();
+              const valid = parsed.filter(
+                (d) => d && typeof d === 'object' && !(d.isDeleted && d.deletedAt && now - d.deletedAt > FOURTEEN_DAYS_MS)
+              );
+              if (valid.length > 0) {
+                localStorage.setItem(APP_STORAGE_KEYS.DOCUMENTS, JSON.stringify(valid));
+                localStorage.setItem(APP_STORAGE_KEYS.DOCUMENTS_V2, JSON.stringify(valid));
+                cleanupLegacyKeys();
+                return valid;
               }
             }
           }
         } catch {
-          // Continue
+          // Ignore
         }
-      }
-    }
-
-    // 3. Scan all remaining localStorage keys for any Markdown documents
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      if (DOCUMENT_STORAGE_KEYS.includes(key) || SNAPSHOT_KEYS.includes(key)) continue;
-
-      try {
-        const raw = localStorage.getItem(key);
-        if (raw && (raw.startsWith('[') || raw.startsWith('{'))) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.title && parsed[0]?.content) {
-            parsed.forEach(addDoc);
-          } else if (parsed && typeof parsed === 'object' && parsed.title && parsed.content) {
-            addDoc(parsed);
-          }
-        }
-      } catch {
-        // Ignore
       }
     }
   } catch (e) {
     console.warn('Failed to parse documents from localStorage:', e);
-  }
-
-  const allDocs = Array.from(documentMap.values());
-
-  // If user documents were found, return them (non-sample documents first)
-  if (allDocs.length > 0) {
-    const userDocs = allDocs.filter(
-      (d) => !sampleTitles.has(d.title.trim().toLowerCase()) && !sampleContents.has(d.content.trim())
-    );
-    const sampleDocs = allDocs.filter(
-      (d) => sampleTitles.has(d.title.trim().toLowerCase()) || sampleContents.has(d.content.trim())
-    );
-
-    // If user has created documents, place them on top and keep samples available
-    const combined = [...userDocs, ...sampleDocs];
-    return combined.length > 0 ? combined : SAMPLE_DOCUMENTS;
   }
 
   return SAMPLE_DOCUMENTS;
@@ -182,7 +139,7 @@ export function useDocumentManager() {
     return 'sample-essay';
   });
 
-  // Sync documents to localStorage (writes to both current and fallback keys for maximum safety)
+  // Sync documents to localStorage (writes to both current and fallback keys for safety)
   useEffect(() => {
     try {
       const now = Date.now();
@@ -291,15 +248,20 @@ export function useDocumentManager() {
     setActiveDocId(docId);
   }, []);
 
-  // Permanent deletion
+  // Permanent deletion (purges document, snapshots, and clears legacy copies)
   const permanentDeleteDocument = useCallback((docId: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== docId));
+    cleanupSnapshotsForDocs([docId]);
+    cleanupLegacyKeys();
   }, []);
 
   // Empty Recycle Bin completely
   const emptyTrash = useCallback(() => {
+    const idsToPurge = trashedDocuments.map((d) => d.id);
     setDocuments((prev) => prev.filter((d) => !d.isDeleted));
-  }, []);
+    cleanupSnapshotsForDocs(idsToPurge);
+    cleanupLegacyKeys();
+  }, [trashedDocuments]);
 
   const renameDocument = useCallback((docId: string, newTitle: string) => {
     setDocuments((prev) =>
@@ -325,14 +287,62 @@ export function useDocumentManager() {
     }
   }, []);
 
-  // Force re-scan of localStorage to pull any external/recovered notes
-  const rescanStorage = useCallback(() => {
-    const freshDocs = loadSavedDocuments();
-    setDocuments(freshDocs);
-    if (freshDocs.length > 0 && !freshDocs.some((d) => d.id === activeDocId)) {
-      setActiveDocId(freshDocs[0].id);
+  // Scan storage: only searches for unmigrated legacy notes and never resurrects deleted documents or snapshots
+  const rescanStorage = useCallback((): number => {
+    let recoveredCount = 0;
+    try {
+      const foundDocs: DocumentItem[] = [];
+      const existingIds = new Set(documents.map((d) => d.id));
+      const existingSignatures = new Set(
+        documents.map((d) => `${d.title.trim().toLowerCase()}::${d.content.trim()}`)
+      );
+
+      for (const key of OBSOLETE_KEYS) {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                if (item && typeof item === 'object' && (item.title || item.content)) {
+                  const title = typeof item.title === 'string' ? item.title.trim() : 'Recovered Document';
+                  const content = typeof item.content === 'string' ? item.content : '';
+                  const id = typeof item.id === 'string' ? item.id : 'doc-' + Math.random().toString(36).substring(2, 9);
+                  const sig = `${title.toLowerCase()}::${content.trim()}`;
+
+                  // Only import if not already present in active or trash
+                  if (!existingIds.has(id) && !existingSignatures.has(sig)) {
+                    foundDocs.push({
+                      id,
+                      title,
+                      content,
+                      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+                      tags: Array.isArray(item.tags) ? item.tags : undefined,
+                    });
+                    existingIds.add(id);
+                    existingSignatures.add(sig);
+                    recoveredCount++;
+                  }
+                }
+              }
+            }
+            // Once inspected, clean up the obsolete key
+            localStorage.removeItem(key);
+          } catch {
+            // Ignore
+          }
+        }
+      }
+
+      if (foundDocs.length > 0) {
+        setDocuments((prev) => [...foundDocs, ...prev]);
+      }
+      cleanupLegacyKeys();
+    } catch (e) {
+      console.warn('Error during storage scan:', e);
     }
-  }, [activeDocId]);
+    return recoveredCount;
+  }, [documents]);
 
   return {
     documents,

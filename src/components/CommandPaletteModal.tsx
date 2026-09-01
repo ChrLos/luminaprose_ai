@@ -304,7 +304,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteProps> = ({
       {
         id: 'act-changelog',
         title: "What's New in Lumina Prose (Release Notes)",
-        subtitle: 'View features, enhancements, and performance updates in v1.2.0',
+        subtitle: 'View features, enhancements, and performance updates in v1.2.1',
         category: 'Actions' as const,
         icon: <Sparkles className="w-4 h-4 text-amber-500" />,
         perform: () => {

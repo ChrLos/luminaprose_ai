@@ -170,4 +170,4 @@ export const APP_STORAGE_KEYS = {
   CHANGELOG_VIEWED: 'lumina_changelog_viewed_version',
 } as const;
 
-export const CURRENT_APP_VERSION = '1.2.0';
+export const CURRENT_APP_VERSION = '1.2.1';

@@ -14,7 +14,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
   isOpen,
   onClose,
   theme,
-  version = '1.2.0',
+  version = '1.2.1',
 }) => {
   const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose);
 
@@ -162,6 +162,10 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({
         {
           feature: 'Standardized hook paths.',
           desc: 'Reorganized internal focus trap modules to follow project conventions while preserving legacy import compatibility.',
+        },
+        {
+          feature: 'Fix Stale Document.',
+          desc: 'Fixing document not able to be saved or changed because of the database migration.',
         },
       ],
     },

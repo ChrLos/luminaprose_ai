@@ -37,7 +37,7 @@ interface DocumentManagerModalProps {
   onRenameDoc: (id: string, newTitle: string) => void;
   onImportDoc: (title: string, content: string) => void;
   onLoadSample: (sample: DocumentItem) => void;
-  onRescanStorage?: () => void;
+  onRescanStorage?: () => number | void;
   theme: ThemeConfig;
 }
 
@@ -372,8 +372,12 @@ export const DocumentManagerModal: React.FC<DocumentManagerModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    onRescanStorage();
-                    showToast(`Scanned storage: ${documents.length} document(s) available.`);
+                    const recovered = onRescanStorage();
+                    if (typeof recovered === 'number' && recovered > 0) {
+                      showToast(`Storage scanned: Recovered ${recovered} unmigrated document(s).`);
+                    } else {
+                      showToast(`Storage scan complete. All documents are up to date.`);
+                    }
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border hover:bg-stone-500/10 cursor-pointer transition-colors"
                   style={{ 
@@ -381,7 +385,7 @@ export const DocumentManagerModal: React.FC<DocumentManagerModalProps> = ({
                     color: theme.textMuted,
                     backgroundColor: theme.bgSecondary,
                   }}
-                  title="Scan browser storage and auto-save snapshots to recover notes"
+                  title="Scan browser storage for any unmigrated notes"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Scan Storage</span>
